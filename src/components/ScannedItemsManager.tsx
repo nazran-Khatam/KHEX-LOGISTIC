@@ -40,8 +40,16 @@ export default function ScannedItemsManager({
     const trimmed = codeToAdd.trim();
     if (!trimmed) return;
 
+    // Split by comma in case the user types/scans multiple codes or has automatic formatting
+    const codes = trimmed
+      .split(',')
+      .map(s => s.trim())
+      .filter(s => s !== '');
+
+    if (codes.length === 0) return;
+
     // Append to existing list
-    const updatedArray = [...serialsArray, trimmed];
+    const updatedArray = [...serialsArray, ...codes];
     const joined = updatedArray.join(', ');
     
     onChange(joined);
@@ -52,6 +60,7 @@ export default function ScannedItemsManager({
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       e.preventDefault();
+      e.stopPropagation();
       handleAddCode(manualCode);
     }
   };

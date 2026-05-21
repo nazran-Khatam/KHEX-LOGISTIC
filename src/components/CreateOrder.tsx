@@ -103,9 +103,11 @@ export default function CreateOrder({ userId, onSuccess }: CreateOrderProps) {
   };
 
   const handleItemChange = (index: number, field: keyof TempItem, value: any) => {
-    const nextItems = [...items];
-    nextItems[index] = { ...nextItems[index], [field]: value };
-    setItems(nextItems);
+    setItems((prevItems) => {
+      const nextItems = [...prevItems];
+      nextItems[index] = { ...nextItems[index], [field]: value };
+      return nextItems;
+    });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {

@@ -94,9 +94,11 @@ export default function EditOrderModal({ order, isOpen, onClose }: EditOrderModa
   };
 
   const handleItemChange = (index: number, field: keyof TempItem, value: any) => {
-    const nextItems = [...items];
-    nextItems[index] = { ...nextItems[index], [field]: value };
-    setItems(nextItems);
+    setItems((prevItems) => {
+      const nextItems = [...prevItems];
+      nextItems[index] = { ...nextItems[index], [field]: value };
+      return nextItems;
+    });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
