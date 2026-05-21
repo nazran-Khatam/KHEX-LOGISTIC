@@ -12,6 +12,7 @@ export interface OrderItem {
   name: string;
   quantity: number;
   price: number;
+  serialNumbers?: string[];
 }
 
 export interface Order {
@@ -24,4 +25,7 @@ export interface Order {
   shippingAddress: string;
   updatedAt: any; // Firestore Timestamp
   movement: Movement[];
+  remark?: string;
+  pickedItems?: Record<string, { count: number; firstSeen: string; serialNumbers?: string[] }>;
+  shippedItems?: Record<string, { count: number; firstSeen: string; serialNumbers?: string[] }>;
 }

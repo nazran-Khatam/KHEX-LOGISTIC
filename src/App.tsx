@@ -66,13 +66,17 @@ export default function App() {
         // Normalize items
         let normalizedItems = [];
         if (Array.isArray(data.items)) {
-          normalizedItems = data.items;
+          normalizedItems = data.items.map((item: any) => ({
+            ...item,
+            serialNumbers: item.serialNumbers || item.serial_numbers || []
+          }));
         } else if (data.items && typeof data.items === 'object') {
           normalizedItems = Object.entries(data.items).map(([key, val]: [string, any]) => ({
             name: key,
             quantity: val.count || 1,
             productId: key,
-            price: 0
+            price: 0,
+            serialNumbers: val.serialNumbers || val.serial_numbers || []
           }));
         }
 
@@ -83,7 +87,7 @@ export default function App() {
           items: normalizedItems,
           shippingAddress: data.shippingAddress || data.location || 'Not Specified',
           movement: Array.isArray(data.movement) ? data.movement : [],
-          orderDate: data.createdAt ? (typeof data.createdAt === 'string' ? { toDate: () => new Date(data.createdAt) } : data.createdAt) : 
+          orderDate: data.createdAt ? (typeof data.createdAt === 'string' ? { toDate: () => new Date(data.createdAt.replace(' ', 'T')) } : data.createdAt) : 
                     (data.orderDate || { toDate: () => new Date() })
         };
       }) as Order[];

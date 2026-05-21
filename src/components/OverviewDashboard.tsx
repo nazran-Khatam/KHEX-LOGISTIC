@@ -44,7 +44,39 @@ export default function OverviewDashboard({ orders }: OverviewDashboardProps) {
 
   deliveredOrders.forEach(order => {
     const start = getDate(order.orderDate);
-    const end = getDate(order.updatedAt);
+    let end: Date | null = null;
+
+    // Check shippedItems for more precise delivery time
+    if (order.shippedItems && Object.keys(order.shippedItems).length > 0) {
+      const firstItem = Object.values(order.shippedItems)[0];
+      if (firstItem && firstItem.firstSeen) {
+        if (typeof firstItem.firstSeen === 'string') {
+          // Parse "03:38:10 PM" format
+          const timeMatch = firstItem.firstSeen.match(/(\d+):(\d+):(\d+)\s*(AM|PM)/i);
+          if (timeMatch) {
+            const baseDate = getDate(order.updatedAt) || new Date();
+            const d = new Date(baseDate);
+            let h = parseInt(timeMatch[1]);
+            const m = parseInt(timeMatch[2]);
+            const s = parseInt(timeMatch[3]);
+            const period = timeMatch[4].toUpperCase();
+            
+            if (period === 'PM' && h < 12) h += 12;
+            if (period === 'AM' && h === 12) h = 0;
+            
+            d.setHours(h, m, s, 0);
+            end = d;
+          }
+        } else {
+          end = getDate(firstItem.firstSeen);
+        }
+      }
+    }
+
+    if (!end) {
+      end = getDate(order.updatedAt);
+    }
+
     if (start && end) {
       const diff = Math.max(0, end.getTime() - start.getTime());
       totalDays += diff / (1000 * 60 * 60 * 24);
