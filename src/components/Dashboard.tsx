@@ -3,7 +3,7 @@ import { User } from 'firebase/auth';
 import { doc, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Order, OrderStatus } from '../types';
-import { LayoutDashboard, Package, Truck, CheckCircle2, LogOut, Search, MapPin, Plus, Edit2, Trash2, AlertOctagon, X } from 'lucide-react';
+import { LayoutDashboard, Package, Truck, CheckCircle2, LogOut, Search, MapPin, Plus, Edit2, Trash2, AlertOctagon, X, FileSpreadsheet } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 import OrderCard from './OrderCard';
@@ -12,6 +12,7 @@ import Logo from './Logo';
 import OverviewDashboard from './OverviewDashboard';
 import CreateOrder from './CreateOrder';
 import EditOrderModal from './EditOrderModal';
+import ReportExportCard from './ReportExportCard';
 
 interface DashboardProps {
   orders: Order[];
@@ -20,7 +21,7 @@ interface DashboardProps {
 }
 
 export default function Dashboard({ orders, user, onLogout }: DashboardProps) {
-  const [activeTab, setActiveTab] = useState<OrderStatus | 'all' | 'create'>('all');
+  const [activeTab, setActiveTab] = useState<OrderStatus | 'all' | 'create' | 'report'>('all');
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [longPressedOrder, setLongPressedOrder] = useState<Order | null>(null);
@@ -109,6 +110,13 @@ export default function Dashboard({ orders, user, onLogout }: DashboardProps) {
             label="Delivered"
             count={stats.delivered}
           />
+          <NavItem 
+            active={activeTab === 'report'} 
+            onClick={() => setActiveTab('report')}
+            icon={<FileSpreadsheet className="w-4 h-4" />}
+            label="Reports"
+            count={0}
+          />
         </nav>
 
         <div className="mt-auto pt-8 border-t border-white/10 space-y-6">
@@ -138,7 +146,7 @@ export default function Dashboard({ orders, user, onLogout }: DashboardProps) {
         <header className="h-24 border-b border-black/10 flex items-center justify-between px-12 shrink-0 bg-[#FF9800] sticky top-0 z-10 shadow-lg">
           <div className="flex items-center gap-12">
             <h2 className="text-2xl font-sans font-bold text-black capitalize tracking-tight">
-              {activeTab === 'all' ? 'Dashboard' : activeTab === 'create' ? 'Create' : activeTab.replace('-', ' ')}
+              {activeTab === 'all' ? 'Dashboard' : activeTab === 'create' ? 'Create Order' : activeTab === 'report' ? 'Logistics Reports' : activeTab.replace('-', ' ')}
             </h2>
             
             <div className="bg-white/90 px-6 py-3 rounded-xl flex items-center gap-8 shadow-sm border border-black/5">
@@ -168,6 +176,8 @@ export default function Dashboard({ orders, user, onLogout }: DashboardProps) {
               <OverviewDashboard orders={orders} />
             ) : activeTab === 'create' ? (
               <CreateOrder userId={user.uid} onSuccess={() => setActiveTab('pending')} />
+            ) : activeTab === 'report' ? (
+              <ReportExportCard orders={orders} />
             ) : (
               <>
                 <div className="flex justify-between items-end">

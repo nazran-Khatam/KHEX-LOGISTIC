@@ -28,4 +28,7 @@ export interface Order {
   remark?: string;
   pickedItems?: Record<string, { count: number; firstSeen: string; serialNumbers?: string[] }>;
   shippedItems?: Record<string, { count: number; firstSeen: string; serialNumbers?: string[] }>;
+  driverName?: string;
+  deliveredBy?: string;
+  receivingName?: string;
 }

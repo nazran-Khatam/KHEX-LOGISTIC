@@ -22,6 +22,9 @@
           }
         },
         "shippingAddress": { "type": "string" },
+        "driverName": { "type": "string", "description": "The name of the assigned dispatch driver." },
+        "deliveredBy": { "type": "string", "description": "The driver who completed delivery." },
+        "receivingName": { "type": "string", "description": "The recipient's name who signed or received the consignment." },
         "updatedAt": { "type": "string", "format": "date-time" },
         "movement": {
           "type": "array",

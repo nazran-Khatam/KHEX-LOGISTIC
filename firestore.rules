@@ -41,8 +41,12 @@ service cloud.firestore {
                       isValidOrder(request.resource.data) &&
                       request.resource.data.userId == resource.data.userId &&
                       (
-                        // Allow updating status and tracking
-                        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'trackingNumber', 'updatedAt', 'movement'])
+                        // Allow updating status, location, items, remarks, and delivery/routing details
+                        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                          'status', 'trackingNumber', 'updatedAt', 'movement', 
+                          'shippingAddress', 'location', 'items', 'totalItems', 'uniqueItems', 'remark',
+                          'driverName', 'deliveredBy', 'receivingName', 'shippedItems', 'pickedItems'
+                        ])
                       );
       
       allow delete: if false; // Orders cannot be deleted by users

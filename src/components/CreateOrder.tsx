@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { collection, doc, setDoc, addDoc, serverTimestamp, Timestamp } from 'firebase/firestore';
 import { db, auth } from '../firebase';
-import { Plus, Trash2, Save, Package, MapPin, Mail, Hash, Loader2, CheckCircle, Clock } from 'lucide-react';
+import { Plus, Trash2, Save, Package, MapPin, Mail, Hash, Loader2, CheckCircle, Clock, Truck } from 'lucide-react';
 import ScannedItemsManager from './ScannedItemsManager';
 
 interface CreateOrderProps {
@@ -83,6 +83,9 @@ export default function CreateOrder({ userId, onSuccess }: CreateOrderProps) {
   const [shippingAddress, setShippingAddress] = useState('');
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [remark, setRemark] = useState('');
+  const [driverName, setDriverName] = useState('');
+  const [deliveredBy, setDeliveredBy] = useState('');
+  const [receivingName, setReceivingName] = useState('');
   const status = 'pending';
   
   const [items, setItems] = useState<TempItem[]>( [
@@ -106,6 +109,24 @@ export default function CreateOrder({ userId, onSuccess }: CreateOrderProps) {
     setItems((prevItems) => {
       const nextItems = [...prevItems];
       nextItems[index] = { ...nextItems[index], [field]: value };
+      return nextItems;
+    });
+  };
+
+  const handleItemSerialsChange = (index: number, newSerials: string) => {
+    const qty = newSerials
+      .split(',')
+      .map(s => s.trim())
+      .filter(s => s !== '')
+      .length;
+
+    setItems((prevItems) => {
+      const nextItems = [...prevItems];
+      nextItems[index] = {
+        ...nextItems[index],
+        serialNumbers: newSerials,
+        quantity: qty || 1
+      };
       return nextItems;
     });
   };
@@ -198,6 +219,9 @@ export default function CreateOrder({ userId, onSuccess }: CreateOrderProps) {
         movement: initialMovement,
         trackingNumber: 'TRK' + Math.floor(100000000 + Math.random() * 900000000),
         remark: remark.trim(),
+        driverName: driverName.trim(),
+        deliveredBy: deliveredBy.trim(),
+        receivingName: receivingName.trim(),
 
         // Android App layout format requirements
         id: orderId,
@@ -222,6 +246,9 @@ export default function CreateOrder({ userId, onSuccess }: CreateOrderProps) {
       setOrderId(generateRandomOrderId());
       setShippingAddress('');
       setRemark('');
+      setDriverName('');
+      setDeliveredBy('');
+      setReceivingName('');
       setItems([{ name: '', quantity: 1, price: 0, serialNumbers: '' }]);
       
       setTimeout(() => {
@@ -360,6 +387,51 @@ export default function CreateOrder({ userId, onSuccess }: CreateOrderProps) {
               </div>
             </div>
 
+            {/* Driver Name */}
+            <div className="space-y-2">
+              <label className="text-[10px] font-black uppercase tracking-widest text-black/60 flex items-center gap-1 font-sans">
+                <Truck className="w-3.5 h-3.5 text-[#FF9800]" />
+                Driver Name (Optional)
+              </label>
+              <input
+                type="text"
+                value={driverName}
+                onChange={(e) => setDriverName(e.target.value)}
+                placeholder="Assign dispatch driver name..."
+                className="w-full bg-black/[0.02] border border-black/10 rounded-2xl py-3.5 px-4 focus:border-[#FF9800] focus:bg-white transition-all text-xs outline-none text-black placeholder:text-black/20 font-medium"
+              />
+            </div>
+
+            {/* Delivered By */}
+            <div className="space-y-2">
+              <label className="text-[10px] font-black uppercase tracking-widest text-[#10b981] flex items-center gap-1 font-sans">
+                <Truck className="w-3.5 h-3.5" />
+                Delivered By (Driver) (Optional)
+              </label>
+              <input
+                type="text"
+                value={deliveredBy}
+                onChange={(e) => setDeliveredBy(e.target.value)}
+                placeholder="Name of driver delivering the items..."
+                className="w-full bg-black/[0.02] border border-black/10 rounded-2xl py-3.5 px-4 focus:border-[#10b981] focus:bg-white transition-all text-xs outline-none text-black placeholder:text-black/20 font-medium"
+              />
+            </div>
+
+            {/* Receiving Name */}
+            <div className="space-y-2">
+              <label className="text-[10px] font-black uppercase tracking-widest text-[#10b981] flex items-center gap-1 font-sans">
+                <CheckCircle className="w-3.5 h-3.5" />
+                Receiving Name (Optional)
+              </label>
+              <input
+                type="text"
+                value={receivingName}
+                onChange={(e) => setReceivingName(e.target.value)}
+                placeholder="Receiver name at destination..."
+                className="w-full bg-black/[0.02] border border-black/10 rounded-2xl py-3.5 px-4 focus:border-[#10b981] focus:bg-white transition-all text-xs outline-none text-black placeholder:text-black/20 font-medium"
+              />
+            </div>
+
             {/* Remark Field (Optional) */}
             <div className="space-y-2">
               <label className="text-[10px] font-black uppercase tracking-widest text-black/60 flex items-center gap-1 font-sans">
@@ -428,8 +500,8 @@ export default function CreateOrder({ userId, onSuccess }: CreateOrderProps) {
                     {/* Integrated Scanned Items Terminal */}
                     <ScannedItemsManager
                       serialNumbers={item.serialNumbers || ''}
-                      onChange={(newSerials) => handleItemChange(index, 'serialNumbers', newSerials)}
-                      onQuantityChange={(newQty) => handleItemChange(index, 'quantity', newQty || 1)}
+                      onChange={(newSerials) => handleItemSerialsChange(index, newSerials)}
+                      onQuantityChange={() => {}}
                     />
                   </div>
                 </div>

@@ -11,7 +11,7 @@ interface OrderDetailsProps {
   onClose: () => void;
 }
 
-function getDeterministicName(seed: string, type: 'driver' | 'receiver', order?: any) {
+export function getDeterministicName(seed: string, type: 'driver' | 'receiver', order?: any) {
   if (type === 'driver' && order) {
     const shippedBy = order.shippedBy || order.shipped_by || order.driver || order.driverEmail || order.driver_by || order.driverBy;
     if (shippedBy && typeof shippedBy === 'string') {
@@ -405,8 +405,9 @@ export default function OrderDetails({ order, isOpen, onClose }: OrderDetailsPro
                     const isShipped = statusLower.includes('ship') || statusLower.includes('transit') || statusLower.includes('pick');
                     const isDelivered = statusLower.includes('deliver');
                     
-                    const driverName = getDeterministicName(order.id, 'driver', order);
-                    const receiverName = getDeterministicName(order.id, 'receiver', order);
+                    const driverName = order.driverName || getDeterministicName(order.id, 'driver', order);
+                    const deliveredByVal = order.deliveredBy || order.driverName || getDeterministicName(order.id, 'driver', order);
+                    const receiverName = order.receivingName || getDeterministicName(order.id, 'receiver', order);
 
                     let stepColor = 'text-zinc-500';
                     let stepBg = 'bg-zinc-500';
@@ -493,7 +494,7 @@ export default function OrderDetails({ order, isOpen, onClose }: OrderDetailsPro
                             <div className="mb-3 bg-emerald-50/30 border border-emerald-100/50 rounded-xl p-3 space-y-1.5 animate-fadeIn">
                               <div className="flex justify-between text-[11px] items-center">
                                 <span className="text-[#10b981] uppercase font-black tracking-wider">Delivered By (Driver)</span>
-                                <span className="font-extrabold text-emerald-900">{driverName}</span>
+                                <span className="font-extrabold text-emerald-900">{deliveredByVal}</span>
                               </div>
                               <div className="flex justify-between text-[11px] items-center">
                                 <span className="text-[#10b981] uppercase font-black tracking-wider">Receiver Name</span>

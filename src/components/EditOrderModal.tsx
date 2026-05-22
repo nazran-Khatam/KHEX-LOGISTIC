@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
-import { X, Save, Trash2, Plus, MapPin, Hash, Package, AlertCircle } from 'lucide-react';
+import { X, Save, Trash2, Plus, MapPin, Hash, Package, AlertCircle, Truck, CheckCircle } from 'lucide-react';
 import { Order } from '../types';
 import ScannedItemsManager from './ScannedItemsManager';
 
@@ -56,6 +56,9 @@ export default function EditOrderModal({ order, isOpen, onClose }: EditOrderModa
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [status, setStatus] = useState<'pending' | 'shipped' | 'delivered'>('pending');
   const [remark, setRemark] = useState('');
+  const [driverName, setDriverName] = useState('');
+  const [deliveredBy, setDeliveredBy] = useState('');
+  const [receivingName, setReceivingName] = useState('');
   const [items, setItems] = useState<TempItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [errorStr, setErrorStr] = useState<string | null>(null);
@@ -65,6 +68,9 @@ export default function EditOrderModal({ order, isOpen, onClose }: EditOrderModa
       setShippingAddress(order.shippingAddress || '');
       setStatus(order.status || 'pending');
       setRemark(order.remark || '');
+      setDriverName(order.driverName || '');
+      setDeliveredBy(order.deliveredBy || '');
+      setReceivingName(order.receivingName || '');
       
       if (order.items && order.items.length > 0) {
         setItems(
@@ -97,6 +103,24 @@ export default function EditOrderModal({ order, isOpen, onClose }: EditOrderModa
     setItems((prevItems) => {
       const nextItems = [...prevItems];
       nextItems[index] = { ...nextItems[index], [field]: value };
+      return nextItems;
+    });
+  };
+
+  const handleItemSerialsChange = (index: number, newSerials: string) => {
+    const qty = newSerials
+      .split(',')
+      .map(s => s.trim())
+      .filter(s => s !== '')
+      .length;
+
+    setItems((prevItems) => {
+      const nextItems = [...prevItems];
+      nextItems[index] = {
+        ...nextItems[index],
+        serialNumbers: newSerials,
+        quantity: qty || 1
+      };
       return nextItems;
     });
   };
@@ -159,6 +183,9 @@ export default function EditOrderModal({ order, isOpen, onClose }: EditOrderModa
         totalItems: totalItemsVal,
         uniqueItems: uniqueItemsVal,
         remark: remark.trim(),
+        driverName: driverName.trim(),
+        deliveredBy: deliveredBy.trim(),
+        receivingName: receivingName.trim(),
         updatedAt: serverTimestamp()
       });
 
@@ -285,6 +312,54 @@ export default function EditOrderModal({ order, isOpen, onClose }: EditOrderModa
             </div>
           </div>
 
+          {/* Driver & Delivery Details */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {/* Driver Name */}
+            <div className="space-y-2">
+              <label className="text-[10px] font-black uppercase tracking-widest text-black/60 flex items-center gap-1 font-sans">
+                <Truck className="w-3.5 h-3.5 text-[#FF9800]" />
+                Driver Name (Optional)
+              </label>
+              <input
+                type="text"
+                value={driverName}
+                onChange={(e) => setDriverName(e.target.value)}
+                placeholder="Assign driver name..."
+                className="w-full bg-black/[0.02] border border-black/10 rounded-2xl py-3 px-4 focus:border-[#FF9800] focus:bg-white transition-all text-xs outline-none text-black placeholder:text-black/20 font-medium"
+              />
+            </div>
+
+            {/* Delivered By */}
+            <div className="space-y-2">
+              <label className="text-[10px] font-black uppercase tracking-widest text-[#10b981] flex items-center gap-1 font-sans">
+                <Truck className="w-3.5 h-3.5" />
+                Delivered By (Driver) (Optional)
+              </label>
+              <input
+                type="text"
+                value={deliveredBy}
+                onChange={(e) => setDeliveredBy(e.target.value)}
+                placeholder="Driver delivering..."
+                className="w-full bg-black/[0.02] border border-black/10 rounded-2xl py-3 px-4 focus:border-[#10b981] focus:bg-white transition-all text-xs outline-none text-black placeholder:text-black/20 font-medium"
+              />
+            </div>
+
+            {/* Receiving Name */}
+            <div className="space-y-2">
+              <label className="text-[10px] font-black uppercase tracking-widest text-[#10b981] flex items-center gap-1 font-sans">
+                <CheckCircle className="w-3.5 h-3.5" />
+                Receiving Name (Optional)
+              </label>
+              <input
+                type="text"
+                value={receivingName}
+                onChange={(e) => setReceivingName(e.target.value)}
+                placeholder="Receiver name..."
+                className="w-full bg-black/[0.02] border border-black/10 rounded-2xl py-3 px-4 focus:border-[#10b981] focus:bg-white transition-all text-xs outline-none text-black placeholder:text-black/20 font-medium"
+              />
+            </div>
+          </div>
+
           {/* Remark (Optional) */}
           <div className="space-y-2">
             <label className="text-[10px] font-black uppercase tracking-widest text-black/60 flex items-center gap-1 font-sans">
@@ -346,8 +421,8 @@ export default function EditOrderModal({ order, isOpen, onClose }: EditOrderModa
                   {/* Integrated Scanned Items Terminal */}
                   <ScannedItemsManager
                     serialNumbers={item.serialNumbers || ''}
-                    onChange={(newSerials) => handleItemChange(idx, 'serialNumbers', newSerials)}
-                    onQuantityChange={(newQty) => handleItemChange(idx, 'quantity', newQty || 1)}
+                    onChange={(newSerials) => handleItemSerialsChange(idx, newSerials)}
+                    onQuantityChange={() => {}}
                   />
                 </div>
               ))}
