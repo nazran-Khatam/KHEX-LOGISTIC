@@ -187,6 +187,12 @@ interface BulkPreviewItem {
   proposedReceiver: string;
   originalRemark: string;
   proposedRemark: string;
+  originalPickupTime?: string;
+  proposedPickupTime?: string;
+  originalReceivedTime?: string;
+  proposedReceivedTime?: string;
+  originalItems?: any[];
+  proposedItems?: any[];
   isValid: boolean;
   errors: string[];
   changesCount: number;
@@ -445,6 +451,13 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
       const deliveredByIdx = headerRow.findIndex(h => h === 'delivered by' || h === 'delivered_by' || h === 'delivered by (driver)');
       const receiverIdx = headerRow.findIndex(h => h === 'receiving name' || h === 'receiving_name' || h === 'receiver' || h === 'receiver name' || h === 'receivingname');
       const remarkIdx = headerRow.findIndex(h => h === 'special remark' || h === 'remark' || h === 'remarks' || h === 'comment' || h === 'notes');
+      
+      // Additional columns for item-level and movement-level edits
+      const pickupTimeIdx = headerRow.findIndex(h => h === 'pickup time' || h === 'pickup_time' || h === 'dispatched time' || h === 'shipped time');
+      const receivedTimeIdx = headerRow.findIndex(h => h === 'received time' || h === 'received_time' || h === 'delivered time' || h === 'delivery time');
+      const productNameIdx = headerRow.findIndex(h => h === 'product name' || h === 'product_name' || h === 'product' || h === 'item');
+      const quantityIdx = headerRow.findIndex(h => h === 'quantity / units count' || h === 'quantity' || h === 'units' || h === 'units count' || h === 'qty');
+      const serialsIdx = headerRow.findIndex(h => h === 'serial numbers list' || h === 'serial_numbers' || h === 'serial numbers' || h === 'serials');
 
       if (idIdx === -1) {
         throw new Error("Could not find required 'Order ID' column. Please download the correct template headers.");
@@ -459,6 +472,13 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
         deliveredBys: string[];
         receivers: string[];
         remarks: string[];
+        pickupTimes: string[];
+        receivedTimes: string[];
+        csvItems: {
+          productName: string;
+          quantity: string;
+          serialNumbers: string;
+        }[];
       }>();
 
       for (let i = 1; i < parsed.length; i++) {
@@ -476,6 +496,12 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
         const rec = receiverIdx !== -1 ? (row[receiverIdx] || '').trim() : '';
         const rem = remarkIdx !== -1 ? (row[remarkIdx] || '').trim() : '';
 
+        const pickupStr = pickupTimeIdx !== -1 ? (row[pickupTimeIdx] || '').trim() : '';
+        const receivedStr = receivedTimeIdx !== -1 ? (row[receivedTimeIdx] || '').trim() : '';
+        const prodName = productNameIdx !== -1 ? (row[productNameIdx] || '').trim() : '';
+        const qtyStr = quantityIdx !== -1 ? (row[quantityIdx] || '').trim() : '';
+        const serialsStr = serialsIdx !== -1 ? (row[serialsIdx] || '').trim() : '';
+
         if (!orderGroups.has(orderId)) {
           orderGroups.set(orderId, {
             addresses: [],
@@ -484,7 +510,10 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
             drivers: [],
             deliveredBys: [],
             receivers: [],
-            remarks: []
+            remarks: [],
+            pickupTimes: [],
+            receivedTimes: [],
+            csvItems: []
           });
         }
         
@@ -496,6 +525,15 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
         if (delBy) group.deliveredBys.push(delBy);
         if (rec) group.receivers.push(rec);
         if (rem) group.remarks.push(rem);
+        if (pickupStr) group.pickupTimes.push(pickupStr);
+        if (receivedStr) group.receivedTimes.push(receivedStr);
+        if (prodName || qtyStr || serialsStr) {
+          group.csvItems.push({
+            productName: prodName,
+            quantity: qtyStr,
+            serialNumbers: serialsStr
+          });
+        }
       }
 
       const previews: BulkPreviewItem[] = [];
@@ -512,6 +550,8 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
         let proposedDeliveredBy = group.deliveredBys[0] || '';
         let proposedReceiver = group.receivers[0] || '';
         let proposedRemark = group.remarks[0] || '';
+        let proposedPickupTime = group.pickupTimes[0] || '';
+        let proposedReceivedTime = group.receivedTimes[0] || '';
 
         let finalStatus = (proposedStatusStr || '').toLowerCase();
 
@@ -528,6 +568,12 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
           if (deliveredByIdx === -1 || group.deliveredBys.length === 0) proposedDeliveredBy = matched.deliveredBy || '';
           if (receiverIdx === -1 || group.receivers.length === 0) proposedReceiver = matched.receivingName || '';
           if (remarkIdx === -1 || group.remarks.length === 0) proposedRemark = matched.remark || '';
+          if (pickupTimeIdx === -1 || group.pickupTimes.length === 0) {
+            proposedPickupTime = getMovementTime(matched, 'shipped');
+          }
+          if (receivedTimeIdx === -1 || group.receivedTimes.length === 0) {
+            proposedReceivedTime = getMovementTime(matched, 'delivered');
+          }
 
           if (finalStatus && !['pending', 'shipped', 'delivered'].includes(finalStatus)) {
             errors.push(`Status value "${proposedStatusStr}" is invalid. Allowed: PENDING, SHIPPED, or DELIVERED.`);
@@ -541,6 +587,66 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
         const originalDeliveredBy = matched ? (matched.deliveredBy || '') : '';
         const originalReceiver = matched ? (matched.receivingName || '') : '';
         const originalRemark = matched ? (matched.remark || '') : '';
+        const originalPickupTime = matched ? getMovementTime(matched, 'shipped') : 'N/A';
+        const originalReceivedTime = matched ? getMovementTime(matched, 'delivered') : 'N/A';
+
+        // Deep copy original items
+        const originalItems = matched ? matched.items.map(item => ({
+          productId: item.productId || '',
+          name: item.name || '',
+          quantity: item.quantity || 0,
+          price: item.price || 0,
+          serialNumbers: [...(item.serialNumbers || [])]
+        })) : [];
+
+        // Build proposed items based on group.csvItems sequence
+        let proposedItems = [];
+        if (group.csvItems.length > 0) {
+          // Group and consolidate CSV items by product name (case-insensitive)
+          const consolidatedCsvItemsMap = new Map<string, { quantity: number; serialNumbers: string[] }>();
+          
+          group.csvItems.forEach(csvItm => {
+            const nameClean = (csvItm.productName || '').trim();
+            if (!nameClean) return;
+
+            let qty = parseInt(csvItm.quantity, 10);
+            if (isNaN(qty)) qty = 0;
+
+            let serials: string[] = [];
+            if (csvItm.serialNumbers !== undefined && csvItm.serialNumbers !== '') {
+              serials = csvItm.serialNumbers.split(/[;,]/).map(s => s.trim()).filter(Boolean);
+            }
+
+            // Find an existing entry with case-insensitive match to merge safely
+            const foundKey = Array.from(consolidatedCsvItemsMap.keys()).find(k => k.toLowerCase() === nameClean.toLowerCase());
+            if (foundKey) {
+              const existing = consolidatedCsvItemsMap.get(foundKey)!;
+              existing.quantity += qty;
+              // Combine and keep unique serials
+              const combinedSerials = [...existing.serialNumbers, ...serials];
+              existing.serialNumbers = Array.from(new Set(combinedSerials));
+            } else {
+              consolidatedCsvItemsMap.set(nameClean, {
+                quantity: qty,
+                serialNumbers: serials
+              });
+            }
+          });
+
+          proposedItems = Array.from(consolidatedCsvItemsMap.entries()).map(([prodName, data]) => {
+            // Find if there's an original item with same name (case-insensitive)
+            const origItem = originalItems.find(itm => (itm.name || '').toLowerCase().trim() === prodName.toLowerCase().trim());
+            return {
+              productId: origItem?.productId || `prod-${Math.random().toString(36).substring(2, 11)}`,
+              name: prodName,
+              quantity: data.quantity,
+              price: origItem?.price || 0,
+              serialNumbers: data.serialNumbers
+            };
+          });
+        } else {
+          proposedItems = originalItems.map(item => ({ ...item }));
+        }
 
         let changesCount = 0;
         if (matched) {
@@ -551,6 +657,27 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
           if (proposedDeliveredBy && proposedDeliveredBy !== originalDeliveredBy) changesCount++;
           if (proposedReceiver && proposedReceiver !== originalReceiver) changesCount++;
           if (proposedRemark !== originalRemark) changesCount++;
+          if (proposedPickupTime && proposedPickupTime !== 'N/A' && proposedPickupTime !== originalPickupTime) changesCount++;
+          if (proposedReceivedTime && proposedReceivedTime !== 'N/A' && proposedReceivedTime !== originalReceivedTime) changesCount++;
+
+          // Items changed check
+          let itemsChanged = false;
+          if (proposedItems.length !== originalItems.length) {
+            itemsChanged = true;
+          } else {
+            for (let i = 0; i < originalItems.length; i++) {
+              const orig = originalItems[i];
+              const prop = proposedItems[i];
+              if (orig.name !== prop.name) itemsChanged = true;
+              if (orig.quantity !== prop.quantity) itemsChanged = true;
+              const origSerials = (orig.serialNumbers || []).join('; ');
+              const propSerials = (prop.serialNumbers || []).join('; ');
+              if (origSerials !== propSerials) itemsChanged = true;
+            }
+          }
+          if (itemsChanged) {
+            changesCount++;
+          }
         }
 
         previews.push({
@@ -569,6 +696,12 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
           proposedReceiver: proposedReceiver || originalReceiver,
           originalRemark,
           proposedRemark,
+          originalPickupTime,
+          proposedPickupTime,
+          originalReceivedTime,
+          proposedReceivedTime,
+          originalItems,
+          proposedItems,
           isValid: errors.length === 0,
           errors,
           changesCount
@@ -661,6 +794,125 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
         }
         if (item.proposedRemark !== item.originalRemark) {
           fieldsToUpdate.remark = item.proposedRemark;
+        }
+
+        if (item.proposedItems && JSON.stringify(item.proposedItems) !== JSON.stringify(item.originalItems)) {
+          fieldsToUpdate.items = item.proposedItems;
+        }
+
+        // Handle movement updates for pickup/received times
+        const matched = orders.find(o => o.id === item.orderId);
+        if (matched) {
+          let movementToUpdate = [...(matched.movement || [])];
+          let movementChanged = false;
+
+          // 1. Check pickup step
+          if (item.proposedPickupTime && item.proposedPickupTime !== 'N/A' && item.proposedPickupTime !== item.originalPickupTime) {
+            let pickupStepIdx = movementToUpdate.findIndex(m => {
+              const sl = (m.status || '').toLowerCase();
+              return sl.includes('ship') || sl.includes('transit') || sl.includes('pick');
+            });
+
+            const [datePart, timePart] = item.proposedPickupTime.split(',');
+            let parsedDate = new Date(item.proposedPickupTime);
+            if (datePart && timePart) {
+              const parts = datePart.trim().split('/');
+              if (parts.length === 3) {
+                const day = parseInt(parts[0], 10);
+                const month = parseInt(parts[1], 10) - 1;
+                const year = parseInt(parts[2], 10);
+                const timeParts = timePart.trim().split(':');
+                let hr = 0, min = 0, sec = 0;
+                if (timeParts.length >= 2) {
+                  hr = parseInt(timeParts[0], 10);
+                  min = parseInt(timeParts[1], 10);
+                  if (timeParts.length >= 3) {
+                    sec = parseInt(timeParts[2].replace(/\s*(AM|PM)/i, ''), 10);
+                    const isPm = /pm/i.test(timeParts[2]);
+                    if (isPm && hr < 12) hr += 12;
+                    if (!isPm && hr === 12 && /am/i.test(timeParts[2])) hr = 0;
+                  }
+                }
+                const dStr = new Date(year, month, day, hr, min, sec);
+                if (!isNaN(dStr.getTime())) {
+                  parsedDate = dStr;
+                }
+              }
+            }
+
+            if (!isNaN(parsedDate.getTime())) {
+              if (pickupStepIdx !== -1) {
+                movementToUpdate[pickupStepIdx] = {
+                  ...movementToUpdate[pickupStepIdx],
+                  timestamp: parsedDate
+                };
+              } else {
+                movementToUpdate.push({
+                  status: 'Picked up by Driver',
+                  timestamp: parsedDate,
+                  location: 'Khex Sorting Facility',
+                  description: 'Package picked up by dispatch driver for immediate transit.'
+                });
+              }
+              movementChanged = true;
+            }
+          }
+
+          // 2. Check received step
+          if (item.proposedReceivedTime && item.proposedReceivedTime !== 'N/A' && item.proposedReceivedTime !== item.originalReceivedTime) {
+            let receivedStepIdx = movementToUpdate.findIndex(m => {
+              const sl = (m.status || '').toLowerCase();
+              return sl.includes('deliver') || sl.includes('received');
+            });
+
+            const [datePart, timePart] = item.proposedReceivedTime.split(',');
+            let parsedDate = new Date(item.proposedReceivedTime);
+            if (datePart && timePart) {
+              const parts = datePart.trim().split('/');
+              if (parts.length === 3) {
+                const day = parseInt(parts[0], 10);
+                const month = parseInt(parts[1], 10) - 1;
+                const year = parseInt(parts[2], 10);
+                const timeParts = timePart.trim().split(':');
+                let hr = 0, min = 0, sec = 0;
+                if (timeParts.length >= 2) {
+                  hr = parseInt(timeParts[0], 10);
+                  min = parseInt(timeParts[1], 10);
+                  if (timeParts.length >= 3) {
+                    sec = parseInt(timeParts[2].replace(/\s*(AM|PM)/i, ''), 10);
+                    const isPm = /pm/i.test(timeParts[2]);
+                    if (isPm && hr < 12) hr += 12;
+                    if (!isPm && hr === 12 && /am/i.test(timeParts[2])) hr = 0;
+                  }
+                }
+                const dStr = new Date(year, month, day, hr, min, sec);
+                if (!isNaN(dStr.getTime())) {
+                  parsedDate = dStr;
+                }
+              }
+            }
+
+            if (!isNaN(parsedDate.getTime())) {
+              if (receivedStepIdx !== -1) {
+                movementToUpdate[receivedStepIdx] = {
+                  ...movementToUpdate[receivedStepIdx],
+                  timestamp: parsedDate
+                };
+              } else {
+                movementToUpdate.push({
+                  status: 'Delivered',
+                  timestamp: parsedDate,
+                  location: matched.shippingAddress || 'Customer Reception',
+                  description: 'Package successfully delivered and received.'
+                });
+              }
+              movementChanged = true;
+            }
+          }
+
+          if (movementChanged) {
+            fieldsToUpdate.movement = movementToUpdate;
+          }
         }
 
         await updateDoc(orderRef, fieldsToUpdate);
