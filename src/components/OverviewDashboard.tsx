@@ -9,6 +9,9 @@ import { Package, TrendingUp, AlertCircle, Clock, Calendar, ChevronLeft, Chevron
 
 interface OverviewDashboardProps {
   orders: Order[];
+  dateRangeType?: 'all' | 'today' | '7days' | '30days' | 'custom';
+  customStartDate?: string;
+  customEndDate?: string;
 }
 
 // Average Delivery Time Calculation Helper Functions
@@ -23,6 +26,17 @@ function getResolvedMovement(order: Order): any[] {
 
   const getDeliveryDate = () => {
     if (!order) return null;
+    
+    // Check movement history first for direct "Delivered" step
+    if (order.movement && order.movement.length > 0) {
+      const deliveredStep = order.movement.find(m => {
+        const statusLower = (m.status || '').toLowerCase();
+        return statusLower.includes('deliver') || statusLower.includes('received');
+      });
+      if (deliveredStep && deliveredStep.timestamp) {
+        return safeGetDate(deliveredStep.timestamp);
+      }
+    }
     
     // Check shippedItems for more precise delivery time
     if (order.shippedItems && Object.keys(order.shippedItems).length > 0) {
@@ -92,130 +106,50 @@ function getResolvedMovement(order: Order): any[] {
         description: 'Package successfully delivered and received.'
       } as any);
     }
+  } else {
+    const hasOrderPlaced = resolvedMovement.some(m => {
+      const s = (m.status || '').toLowerCase();
+      return s.includes('place') || s.includes('create');
+    });
+    if (!hasOrderPlaced) {
+      const createdTime = safeGetDate(order.orderDate) || new Date();
+      resolvedMovement.push({
+        status: 'Order Placed',
+        timestamp: createdTime,
+        location: 'Khex Central Hub',
+        description: 'Your order was successfully created and logged.'
+      } as any);
+    }
   }
 
   return resolvedMovement.slice().sort((a, b) => {
     const dateA = safeGetDate(a.timestamp);
     const dateB = safeGetDate(b.timestamp);
-    return dateA.getTime() - dateB.getTime();
+    const diff = dateA.getTime() - dateB.getTime();
+    if (diff !== 0) return diff;
+    
+    const getPrec = (status: string) => {
+      const s = (status || '').toLowerCase();
+      if (s.includes('place') || s.includes('create')) return 1;
+      if (s.includes('pick') || s.includes('ship') || s.includes('transit')) return 2;
+      if (s.includes('deliver') || s.includes('receive')) return 3;
+      return 4;
+    };
+    return getPrec(a.status) - getPrec(b.status);
   });
 }
 
-export default function OverviewDashboard({ orders }: OverviewDashboardProps) {
-  const [dateRangeType, setDateRangeType] = useState<'all' | 'today' | '7days' | '30days' | 'custom'>('all');
-  const [customStartDate, setCustomStartDate] = useState<string>('');
-  const [customEndDate, setCustomEndDate] = useState<string>('');
+export default function OverviewDashboard({ 
+  orders,
+  dateRangeType: propDateRangeType,
+  customStartDate: propCustomStartDate,
+  customEndDate: propCustomEndDate
+}: OverviewDashboardProps) {
+  const dateRangeType = propDateRangeType !== undefined ? propDateRangeType : 'all';
+  const customStartDate = propCustomStartDate !== undefined ? propCustomStartDate : '';
+  const customEndDate = propCustomEndDate !== undefined ? propCustomEndDate : '';
 
-  const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
-  const today = new Date();
-  const [viewMonth, setViewMonth] = useState(today.getMonth());
-  const [viewYear, setViewYear] = useState(today.getFullYear());
-  const [showMonthYearPicker, setShowMonthYearPicker] = useState(false);
-  const [hoveredDateStr, setHoveredDateStr] = useState<string | null>(null);
 
-  // Click-outside listener
-  useEffect(() => {
-    if (!isDatePickerOpen) return;
-    const handleOutsideClick = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (!target.closest('.custom-datepicker-container')) {
-        setIsDatePickerOpen(false);
-        setShowMonthYearPicker(false);
-      }
-    };
-    document.addEventListener('mousedown', handleOutsideClick);
-    return () => document.removeEventListener('mousedown', handleOutsideClick);
-  }, [isDatePickerOpen]);
-
-  const monthNamesAbbrev = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  const monthNames = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
-  const weekdays = ["M", "T", "W", "T", "F", "S", "S"];
-
-  const getDaysInMonth = (year: number, month: number) => {
-    return new Date(year, month + 1, 0).getDate();
-  };
-
-  const getDayOfWeekOffset = (year: number, month: number) => {
-    const day = new Date(year, month, 1).getDay();
-    return day === 0 ? 6 : day - 1; // Mon=0, Sun=6
-  };
-
-  const formatDatePickerLabel = (dateStr: string) => {
-    if (!dateStr) return '';
-    const d = new Date(dateStr);
-    if (isNaN(d.getTime())) return dateStr;
-    return `${d.getDate()} ${monthNamesAbbrev[d.getMonth()]} ${d.getFullYear()}`;
-  };
-
-  const makeDateStr = (year: number, month: number, day: number) => {
-    const mStr = String(month + 1).padStart(2, '0');
-    const dStr = String(day).padStart(2, '0');
-    return `${year}-${mStr}-${dStr}`;
-  };
-
-  const handleDateClick = (dayStr: string) => {
-    if (!customStartDate || (customStartDate && customEndDate)) {
-      setCustomStartDate(dayStr);
-      setCustomEndDate('');
-    } else {
-      const startTime = new Date(customStartDate).getTime();
-      const clickedTime = new Date(dayStr).getTime();
-      
-      if (clickedTime < startTime) {
-        setCustomStartDate(dayStr);
-      } else {
-        setCustomEndDate(dayStr);
-        setIsDatePickerOpen(false);
-      }
-    }
-  };
-
-  const isSelectedStart = (dayDateStr: string) => {
-    return customStartDate === dayDateStr;
-  };
-
-  const isSelectedEnd = (dayDateStr: string) => {
-    return customEndDate === dayDateStr;
-  };
-
-  const isDateBetween = (dayDateStr: string) => {
-    if (!customStartDate) return false;
-    
-    const dayTime = new Date(dayDateStr).getTime();
-    const startTime = new Date(customStartDate).getTime();
-    
-    if (customEndDate) {
-      const endTime = new Date(customEndDate).getTime();
-      return dayTime > startTime && dayTime < endTime;
-    }
-    
-    if (hoveredDateStr) {
-      const hoverTime = new Date(hoveredDateStr).getTime();
-      if (hoverTime > startTime) {
-        return dayTime > startTime && dayTime < hoverTime;
-      }
-    }
-    
-    return false;
-  };
-
-  const prevMonth = () => {
-    if (viewMonth === 0) {
-      setViewMonth(11);
-      setViewYear(prev => prev - 1);
-    } else {
-      setViewMonth(prev => prev - 1);
-    }
-  };
-
-  const nextMonth = () => {
-    if (viewMonth === 11) {
-      setViewMonth(0);
-      setViewYear(prev => prev + 1);
-    } else {
-      setViewMonth(prev => prev + 1);
-    }
-  };
 
   const getOrderDate = (order: Order): Date | null => {
     if (!order.orderDate) return null;
@@ -350,207 +284,7 @@ export default function OverviewDashboard({ orders }: OverviewDashboardProps) {
       animate={{ opacity: 1, y: 0 }}
       className="space-y-8"
     >
-      {/* Top Header with Date Filter */}
-      <div className="flex justify-end items-center gap-4 bg-white p-4 rounded-3xl border border-black/5 shadow-sm">
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-2 bg-black/[0.03] px-3 py-2 rounded-xl border border-black/5">
-            <Calendar className="w-3.5 h-3.5 text-black/40" />
-            <select
-              value={dateRangeType}
-              onChange={(e) => setDateRangeType(e.target.value as any)}
-              className="bg-transparent border-none outline-none text-xs font-bold text-black cursor-pointer pr-4 focus:ring-0"
-            >
-              <option value="all">All Time</option>
-              <option value="today">Today</option>
-              <option value="7days">Last 7 Days</option>
-              <option value="30days">Last 30 Days</option>
-              <option value="custom">Custom Range</option>
-            </select>
-          </div>
 
-          {dateRangeType === 'custom' && (
-            <div className="relative custom-datepicker-container min-w-[220px]">
-              <button
-                onClick={() => setIsDatePickerOpen(!isDatePickerOpen)}
-                className="flex items-center justify-between w-full gap-2 bg-black/[0.03] hover:bg-black/[0.06] transition-colors p-3 py-2 rounded-xl border border-black/5 text-xs font-bold text-black cursor-pointer"
-              >
-                <div className="flex items-center gap-2">
-                  <Calendar className="w-3.5 h-3.5 text-black/40" />
-                  <span>
-                    {customStartDate 
-                      ? `${formatDatePickerLabel(customStartDate)}${customEndDate ? ` - ${formatDatePickerLabel(customEndDate)}` : ' - ...'}`
-                      : 'Select Range'
-                    }
-                  </span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  {(customStartDate || customEndDate) && (
-                    <span 
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setCustomStartDate('');
-                        setCustomEndDate('');
-                        setHoveredDateStr(null);
-                      }} 
-                      className="text-[10px] bg-black/5 hover:bg-black/10 px-1.5 py-0.5 rounded text-black/40 hover:text-black/80 uppercase font-black"
-                    >
-                      Clear
-                    </span>
-                  )}
-                  <span className="text-[10px] text-black/40 font-black">▼</span>
-                </div>
-              </button>
-
-              {isDatePickerOpen && (
-                <div className="absolute right-0 top-full mt-2 z-50 bg-white border border-black/10 rounded-2xl p-4 shadow-xl w-[265px] animate-fade-in text-black custom-datepicker-container">
-                  {showMonthYearPicker ? (
-                    <div className="py-1">
-                      {/* Year slider */}
-                      <div className="flex justify-between items-center px-1 mb-3 border-b border-black/5 pb-2">
-                        <button 
-                          onClick={() => setViewYear(prev => prev - 1)}
-                          className="text-xs font-bold text-black/50 hover:text-black p-1 bg-black/[0.02] hover:bg-black/5 rounded"
-                        >
-                          &larr;
-                        </button>
-                        <span className="text-xs font-black text-black tracking-wider">{viewYear}</span>
-                        <button 
-                          onClick={() => setViewYear(prev => prev + 1)}
-                          className="text-xs font-bold text-black/50 hover:text-black p-1 bg-black/[0.02] hover:bg-black/5 rounded"
-                        >
-                          &rarr;
-                        </button>
-                      </div>
-                      
-                      {/* Month selection grid */}
-                      <div className="grid grid-cols-3 gap-1.5 text-center text-xs font-bold">
-                        {monthNames.map((name, mIdx) => (
-                          <button
-                            key={name}
-                            onClick={() => {
-                              setViewMonth(mIdx);
-                              setShowMonthYearPicker(false);
-                            }}
-                            className={`py-2 rounded-xl transition-all ${
-                              viewMonth === mIdx 
-                                ? 'bg-black text-white' 
-                                : 'bg-black/[0.02] text-black hover:bg-black/5'
-                            }`}
-                          >
-                            {name}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ) : (
-                    <div>
-                      {/* Header with Month/Year dropdown and left/right arrows */}
-                      <div className="flex items-center justify-between mb-4">
-                        <button
-                          onClick={() => setShowMonthYearPicker(true)}
-                          className="flex items-center gap-1 text-xs font-black uppercase text-neutral-800 hover:bg-black/5 px-2 py-1 rounded-lg transition-colors cursor-pointer text-left"
-                        >
-                          <span>{monthNames[viewMonth]} {viewYear}</span>
-                          <span className="text-[8px] text-neutral-400">▼</span>
-                        </button>
-
-                        <div className="flex items-center gap-3">
-                          <button
-                            onClick={prevMonth}
-                            className="text-neutral-500 hover:text-neutral-800 hover:bg-black/5 p-1 rounded-full text-sm font-bold transition-all w-6 h-6 flex items-center justify-center cursor-pointer"
-                          >
-                            <ChevronLeft className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={nextMonth}
-                            className="text-neutral-500 hover:text-neutral-800 hover:bg-black/5 p-1 rounded-full text-sm font-bold transition-all w-6 h-6 flex items-center justify-center cursor-pointer"
-                          >
-                            <ChevronRight className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Row labels: M T W T F S S */}
-                      <div className="grid grid-cols-7 gap-y-1 gap-x-1 text-center text-[10px] font-bold text-black/35 tracking-wider mb-1.5">
-                        {weekdays.map((day, i) => (
-                          <div key={i}>{day}</div>
-                        ))}
-                      </div>
-
-                      {/* Divider line */}
-                      <div className="border-b border-black/[0.06] mb-2" />
-
-                      {/* Month label divider (e.g. JUN) */}
-                      <div className="text-[10px] font-black uppercase tracking-widest text-[#94a3b8] mb-1.5 px-0.5 text-left">
-                        {monthNames[viewMonth]}
-                      </div>
-
-                      {/* Dynamic grid of days */}
-                      <div className="grid grid-cols-7 gap-y-1 gap-x-1 justify-items-center text-center">
-                        {(() => {
-                          const year = viewYear;
-                          const month = viewMonth;
-                          const total = getDaysInMonth(year, month);
-                          const startOffset = getDayOfWeekOffset(year, month);
-                          const cells = [];
-                          
-                          // Empty cells for offset offsets
-                          for (let b = 0; b < startOffset; b++) {
-                            cells.push(<div key={`blank-${b}`} className="w-8 h-8" />);
-                          }
-                          
-                          // Days in month
-                          for (let d = 1; d <= total; d++) {
-                            const dateStr = makeDateStr(year, month, d);
-                            const isStart = isSelectedStart(dateStr);
-                            const isEnd = isSelectedEnd(dateStr);
-                            const isBetween = isDateBetween(dateStr);
-                            
-                            cells.push(
-                              <div key={`day-${d}`} className="relative w-full h-8 flex items-center justify-center">
-                                {/* Connector highlight background lines */}
-                                {isBetween && (
-                                  <div className="absolute inset-y-1.5 left-0 right-0 bg-[#edf5ff]/80" />
-                                )}
-                                {isStart && (customEndDate || hoveredDateStr) && (
-                                  <div className="absolute inset-y-1.5 left-1/2 right-0 bg-[#edf5ff]/80" />
-                                )}
-                                {isEnd && (
-                                  <div className="absolute inset-y-1.5 left-0 right-1/2 bg-[#edf5ff]/80" />
-                                )}
-
-                                <button
-                                  type="button"
-                                  onClick={() => handleDateClick(dateStr)}
-                                  onMouseEnter={() => setHoveredDateStr(dateStr)}
-                                  onMouseLeave={() => setHoveredDateStr(null)}
-                                  className={`relative z-10 w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all ${
-                                    isStart
-                                      ? 'border border-black bg-white text-black shadow-sm'
-                                      : isEnd
-                                        ? 'bg-[#edf5ff] border border-blue-200 text-[#2c6ec4] shadow-sm'
-                                        : isBetween
-                                          ? 'text-[#2c6ec4] bg-transparent hover:bg-blue-100/30'
-                                          : 'text-neutral-700 hover:bg-black/5 font-medium'
-                                  }`}
-                                >
-                                  {d}
-                                </button>
-                              </div>
-                            );
-                          }
-                          
-                          return cells;
-                        })()}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
 
       {/* Metrics Grid */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">

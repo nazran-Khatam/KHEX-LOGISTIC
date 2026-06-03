@@ -50,25 +50,63 @@ export default function OrderCard({ order, index, onClick, onLongPress }: OrderC
   const getDisplayDate = () => {
     if (!order) return new Date();
     
+    const safeGetDate = (date: any): Date | null => {
+      if (!date) return null;
+      if (typeof date.toDate === 'function') return date.toDate();
+      const d = new Date(date);
+      return isNaN(d.getTime()) ? null : d;
+    };
+
     // For delivered orders, try to get delivery time from movement or updatedAt
     if (order.status === 'delivered') {
-      if (order.updatedAt) {
-        if (typeof order.updatedAt.toDate === 'function') return order.updatedAt.toDate();
-        const d = new Date(order.updatedAt);
-        if (!isNaN(d.getTime())) return d;
+      // Check movement history first for direct "Delivered" step
+      if (order.movement && order.movement.length > 0) {
+        const deliveredStep = order.movement.find(m => {
+          const statusLower = (m.status || '').toLowerCase();
+          return statusLower.includes('deliver') || statusLower.includes('received');
+        });
+        if (deliveredStep && deliveredStep.timestamp) {
+          const d = safeGetDate(deliveredStep.timestamp);
+          if (d) return d;
+        }
       }
-      const deliveryStep = order.movement?.find(m => m.status.toLowerCase() === 'delivered');
-      if (deliveryStep && deliveryStep.timestamp) {
-        if (typeof deliveryStep.timestamp.toDate === 'function') return deliveryStep.timestamp.toDate();
-        const d = new Date(deliveryStep.timestamp);
-        if (!isNaN(d.getTime())) return d;
+
+      // Check shippedItems for more precise delivery time
+      if (order.shippedItems && Object.keys(order.shippedItems).length > 0) {
+        const firstItem = Object.values(order.shippedItems)[0];
+        if (firstItem && firstItem.firstSeen) {
+          if (typeof firstItem.firstSeen === 'string') {
+            const timeMatch = firstItem.firstSeen.match(/(\d+):(\d+):(\d+)\s*(AM|PM)/i);
+            if (timeMatch) {
+              const updatedAt = safeGetDate(order.updatedAt) || new Date();
+              const d = new Date(updatedAt);
+              let h = parseInt(timeMatch[1]);
+              const m = parseInt(timeMatch[2]);
+              const s = parseInt(timeMatch[3]);
+              const period = timeMatch[4].toUpperCase();
+              
+              if (period === 'PM' && h < 12) h += 12;
+              if (period === 'AM' && h === 12) h = 0;
+              
+              d.setHours(h, m, s, 0);
+              return d;
+            }
+          } else {
+            const d = safeGetDate(firstItem.firstSeen);
+            if (d) return d;
+          }
+        }
+      }
+
+      if (order.updatedAt) {
+        const d = safeGetDate(order.updatedAt);
+        if (d) return d;
       }
     }
 
     if (order.orderDate) {
-      if (typeof order.orderDate.toDate === 'function') return order.orderDate.toDate();
-      const d = new Date(order.orderDate);
-      if (!isNaN(d.getTime())) return d;
+      const d = safeGetDate(order.orderDate);
+      if (d) return d;
     }
 
     return new Date();

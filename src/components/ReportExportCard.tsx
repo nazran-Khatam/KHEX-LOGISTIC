@@ -61,6 +61,17 @@ function getResolvedMovement(order: Order): any[] {
   const getDeliveryDate = () => {
     if (!order) return null;
     
+    // Check movement history first for direct "Delivered" step
+    if (order.movement && order.movement.length > 0) {
+      const deliveredStep = order.movement.find(m => {
+        const statusLower = (m.status || '').toLowerCase();
+        return statusLower.includes('deliver') || statusLower.includes('received');
+      });
+      if (deliveredStep && deliveredStep.timestamp) {
+        return safeGetDate(deliveredStep.timestamp);
+      }
+    }
+    
     // Check shippedItems for more precise delivery time
     if (order.shippedItems && Object.keys(order.shippedItems).length > 0) {
       const firstItem = Object.values(order.shippedItems)[0];
@@ -129,12 +140,36 @@ function getResolvedMovement(order: Order): any[] {
         description: 'Package successfully delivered and received.'
       } as any);
     }
+  } else {
+    const hasOrderPlaced = resolvedMovement.some(m => {
+      const s = (m.status || '').toLowerCase();
+      return s.includes('place') || s.includes('create');
+    });
+    if (!hasOrderPlaced) {
+      const createdTime = safeGetDate(order.orderDate) || new Date();
+      resolvedMovement.push({
+        status: 'Order Placed',
+        timestamp: createdTime,
+        location: 'Khex Central Hub',
+        description: 'Your order was successfully created and logged.'
+      } as any);
+    }
   }
 
   return resolvedMovement.slice().sort((a, b) => {
     const dateA = safeGetDate(a.timestamp);
     const dateB = safeGetDate(b.timestamp);
-    return dateA.getTime() - dateB.getTime();
+    const diff = dateA.getTime() - dateB.getTime();
+    if (diff !== 0) return diff;
+    
+    const getPrec = (status: string) => {
+      const s = (status || '').toLowerCase();
+      if (s.includes('place') || s.includes('create')) return 1;
+      if (s.includes('pick') || s.includes('ship') || s.includes('transit')) return 2;
+      if (s.includes('deliver') || s.includes('receive')) return 3;
+      return 4;
+    };
+    return getPrec(a.status) - getPrec(b.status);
   });
 }
 
