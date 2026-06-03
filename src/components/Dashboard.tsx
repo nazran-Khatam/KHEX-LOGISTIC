@@ -396,7 +396,7 @@ export default function Dashboard({ orders, user, onLogout }: DashboardProps) {
               <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-black/40" />
               <input 
                 type="text" 
-                placeholder="Node Lookup..."
+                placeholder="Search..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full bg-white border border-neutral-100 rounded-xl py-3 pl-10 pr-3 focus:border-neutral-400 text-xs font-semibold outline-none text-black placeholder:text-neutral-400 shadow-sm"
