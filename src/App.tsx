@@ -28,6 +28,7 @@ import { Order } from './types';
 import Dashboard from './components/Dashboard';
 import { LogIn, Package, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { getSanitizedMovement } from './lib/utils';
 
 import Logo from './components/Logo';
 
@@ -86,7 +87,7 @@ export default function App() {
           status: data.status || 'pending',
           items: normalizedItems,
           shippingAddress: data.shippingAddress || data.location || 'Not Specified',
-          movement: Array.isArray(data.movement) ? data.movement : [],
+          movement: getSanitizedMovement(Array.isArray(data.movement) ? data.movement : []),
           orderDate: data.createdAt ? (typeof data.createdAt === 'string' ? { toDate: () => new Date(data.createdAt.replace(' ', 'T')) } : data.createdAt) : 
                     (data.orderDate || { toDate: () => new Date() })
         };

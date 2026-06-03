@@ -18,7 +18,7 @@ service cloud.firestore {
     function isValidOrder(data) {
       return data.userId is string &&
              data.status in ['pending', 'shipped', 'delivered'] &&
-             data.items is list &&
+             (data.items is list || data.items is map) &&
              data.updatedAt == request.time;
     }
 
@@ -32,12 +32,10 @@ service cloud.firestore {
       allow list: if isSignedIn();
       
       allow create: if isSignedIn() && 
-                      isOwner(request.resource.data.userId) && 
                       isValidOrder(request.resource.data) &&
                       request.resource.data.orderDate == request.time;
 
       allow update: if isSignedIn() && 
-                      isOwner(resource.data.userId) &&
                       isValidOrder(request.resource.data) &&
                       request.resource.data.userId == resource.data.userId &&
                       (

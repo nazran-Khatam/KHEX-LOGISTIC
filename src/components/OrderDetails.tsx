@@ -4,6 +4,7 @@ import { X, MapPin, Package, Clock, Truck, CheckCircle2, Navigation, ChevronDown
 import { Order } from '../types';
 import { cn } from '../lib/utils';
 import { format } from 'date-fns';
+import { universalParseDate } from './OverviewDashboard';
 
 interface OrderDetailsProps {
   order: Order | undefined;
@@ -75,10 +76,7 @@ export default function OrderDetails({ order, isOpen, onClose }: OrderDetailsPro
   if (!order && isOpen) return null;
 
   const safeGetDate = (date: any): Date => {
-    if (!date) return new Date();
-    if (typeof date.toDate === 'function') return date.toDate();
-    const d = new Date(date);
-    return isNaN(d.getTime()) ? new Date() : d;
+    return universalParseDate(date) || new Date();
   };
 
   const orderDate = safeGetDate(order?.orderDate);
@@ -363,18 +361,37 @@ export default function OrderDetails({ order, isOpen, onClose }: OrderDetailsPro
                   
                   {(() => {
                     const resolvedMovement = [...(order.movement || [])];
-                    if (resolvedMovement.length === 0) {
-                      const createdTime = safeGetDate(order.orderDate);
-                      
+                    const createdTime = safeGetDate(order.orderDate);
+
+                    // 1. Ensure "Order Placed" is present
+                    const hasOrderPlaced = resolvedMovement.some(m => {
+                      const s = (m.status || '').toLowerCase();
+                      return s.includes('place') || s.includes('create');
+                    });
+                    if (!hasOrderPlaced) {
                       resolvedMovement.push({
                         status: 'Order Placed',
                         timestamp: createdTime,
                         location: 'Khex Central Hub',
                         description: 'Your order was successfully created and logged.'
                       } as any);
+                    }
 
-                      if (order.status === 'shipped' || order.status === 'delivered') {
-                        const shippedTime = new Date(createdTime.getTime() + 1.5 * 3600 * 1000);
+                    // Get normalized placement time
+                    const orderPlacedStep = resolvedMovement.find(m => {
+                      const s = (m.status || '').toLowerCase();
+                      return s.includes('place') || s.includes('create');
+                    });
+                    const placementTime = orderPlacedStep ? safeGetDate(orderPlacedStep.timestamp) : createdTime;
+
+                    // 2. Ensure "Picked up by Driver" or similar pickup step is present for shipped or delivered orders
+                    if (order.status === 'shipped' || order.status === 'delivered') {
+                      const hasPickup = resolvedMovement.some(m => {
+                        const s = (m.status || '').toLowerCase();
+                        return s.includes('ship') || s.includes('transit') || s.includes('pick');
+                      });
+                      if (!hasPickup) {
+                        const shippedTime = new Date(placementTime.getTime() + 1.5 * 3600 * 1000);
                         resolvedMovement.push({
                           status: 'Picked up by Driver',
                           timestamp: shippedTime,
@@ -382,8 +399,15 @@ export default function OrderDetails({ order, isOpen, onClose }: OrderDetailsPro
                           description: 'Package picked up by dispatch driver for immediate transit.'
                         } as any);
                       }
+                    }
 
-                      if (order.status === 'delivered') {
+                    // 3. Ensure "Delivered" or similar delivery step is present for delivered orders
+                    if (order.status === 'delivered') {
+                      const hasDelivery = resolvedMovement.some(m => {
+                        const s = (m.status || '').toLowerCase();
+                        return s.includes('deliver') || s.includes('received');
+                      });
+                      if (!hasDelivery) {
                         let deliveredTimeStr = order.updatedAt;
                         if (order.shippedItems && Object.keys(order.shippedItems).length > 0) {
                           const firstItem = Object.values(order.shippedItems)[0];
@@ -393,27 +417,13 @@ export default function OrderDetails({ order, isOpen, onClose }: OrderDetailsPro
                         }
                         const deliveredTime = deliveryDate && !isNaN(deliveryDate.getTime())
                           ? deliveryDate
-                          : (deliveredTimeStr ? safeGetDate(deliveredTimeStr) : new Date(createdTime.getTime() + 4 * 3600 * 1000));
+                          : (deliveredTimeStr ? safeGetDate(deliveredTimeStr) : new Date(placementTime.getTime() + 4 * 3600 * 1000));
 
                         resolvedMovement.push({
                           status: 'Delivered',
                           timestamp: deliveredTime,
                           location: order.shippingAddress || 'Customer Reception',
                           description: 'Package successfully delivered and received.'
-                        } as any);
-                      }
-                    } else {
-                      const hasOrderPlaced = resolvedMovement.some(m => {
-                        const s = (m.status || '').toLowerCase();
-                        return s.includes('place') || s.includes('create');
-                      });
-                      if (!hasOrderPlaced) {
-                        const createdTime = safeGetDate(order.orderDate) || new Date();
-                        resolvedMovement.push({
-                          status: 'Order Placed',
-                          timestamp: createdTime,
-                          location: 'Khex Central Hub',
-                          description: 'Your order was successfully created and logged.'
                         } as any);
                       }
                     }

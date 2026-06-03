@@ -3,8 +3,78 @@ import { Order } from '../types';
 import { Download, FileSpreadsheet, FileJson, SlidersHorizontal, CheckCircle, Info, Upload, FileUp, RefreshCw, AlertTriangle, Trash2, Loader2, Check } from 'lucide-react';
 import { motion } from 'motion/react';
 import { getDeterministicName } from './OrderDetails';
+import { universalParseDate } from './OverviewDashboard';
 import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
+
+function isStringFieldChanged(proposed: string, original: string): boolean {
+  const cleanStr = (s: string) => {
+    let val = (s || '').trim().toLowerCase();
+    // Neutralize default placeholder or unassigned values to avoid false edits
+    if (val === 'n/a' || val === 'none' || val === '(none)' || val === '(unassigned)' || val === '-' || val === 'no record') return '';
+    val = val.replace(/\s+/g, ' ');
+    return val;
+  };
+  
+  const cleanP = cleanStr(proposed);
+  const cleanO = cleanStr(original);
+  
+  // Rule: If proposed value is empty/placeholder, we interpret it as 'no change / keep original non-empty value'
+  // to avoid detecting false edits.
+  if (cleanP === '') {
+    return false;
+  }
+  
+  if (cleanP === cleanO) return false;
+  
+  // Try date-time parsing for robust comparison of timestamps
+  const d1 = universalParseDate(proposed);
+  const d2 = universalParseDate(original);
+  if (d1 && d2) {
+    return Math.abs(d1.getTime() - d2.getTime()) >= 2000;
+  }
+  
+  return cleanP !== cleanO;
+}
+
+function compareItems(origList: any[], proposedList: any[]): boolean {
+  if (origList.length !== proposedList.length) return true;
+  
+  // Sort both by name (lowercase) to ensure order-independent, case-insensitive comparison
+  const sortedOrig = [...origList].sort((a, b) => (a.name || '').toLowerCase().localeCompare((b.name || '').toLowerCase()));
+  const sortedProp = [...proposedList].sort((a, b) => (a.name || '').toLowerCase().localeCompare((b.name || '').toLowerCase()));
+  
+  for (let i = 0; i < sortedOrig.length; i++) {
+    const o = sortedOrig[i];
+    const p = sortedProp[i];
+    
+    if ((o.name || '').trim().toLowerCase() !== (p.name || '').trim().toLowerCase()) return true;
+    if (Number(o.quantity) !== Number(p.quantity)) return true;
+    
+    // Sort and clean serial numbers for order-independent comparison
+    const oSerials = (o.serialNumbers || []).map((s: string) => s.trim().toLowerCase()).sort();
+    const pSerials = (p.serialNumbers || []).map((s: string) => s.trim().toLowerCase()).sort();
+    
+    if (oSerials.join(';') !== pSerials.join(';')) return true;
+  }
+  
+  return false;
+}
+
+function formatTimeAMPM(date: Date, includeSeconds = false): string {
+  let hours = date.getHours();
+  const minutes = date.getMinutes();
+  const ampm = hours >= 12 ? 'PM' : 'AM';
+  hours = hours % 12;
+  hours = hours ? hours : 12;
+  const minStr = minutes < 10 ? '0' + minutes : minutes;
+  if (includeSeconds) {
+    const seconds = date.getSeconds();
+    const secStr = seconds < 10 ? '0' + seconds : seconds;
+    return `${hours}:${minStr}:${secStr} ${ampm}`;
+  }
+  return `${hours}:${minStr} ${ampm}`;
+}
 
 interface ReportExportCardProps {
   orders: Order[];
@@ -52,10 +122,7 @@ function parseCSV(text: string): string[][] {
 function getResolvedMovement(order: Order): any[] {
   if (!order) return [];
   const safeGetDate = (date: any): Date => {
-    if (!date) return new Date();
-    if (typeof date.toDate === 'function') return date.toDate();
-    const d = new Date(date);
-    return isNaN(d.getTime()) ? new Date() : d;
+    return universalParseDate(date) || new Date();
   };
 
   const getDeliveryDate = () => {
@@ -107,18 +174,37 @@ function getResolvedMovement(order: Order): any[] {
   };
 
   const resolvedMovement = [...(order.movement || [])];
-  if (resolvedMovement.length === 0) {
-    const createdTime = safeGetDate(order.orderDate);
-    
+  const createdTime = safeGetDate(order.orderDate);
+
+  // 1. Ensure "Order Placed" is present
+  const hasOrderPlaced = resolvedMovement.some(m => {
+    const s = (m.status || '').toLowerCase();
+    return s.includes('place') || s.includes('create');
+  });
+  if (!hasOrderPlaced) {
     resolvedMovement.push({
       status: 'Order Placed',
       timestamp: createdTime,
       location: 'Khex Central Hub',
       description: 'Your order was successfully created and logged.'
     } as any);
+  }
 
-    if (order.status === 'shipped' || order.status === 'delivered') {
-      const shippedTime = new Date(createdTime.getTime() + 1.5 * 3600 * 1000);
+  // Get the normalized placement time
+  const orderPlacedStep = resolvedMovement.find(m => {
+    const s = (m.status || '').toLowerCase();
+    return s.includes('place') || s.includes('create');
+  });
+  const placementTime = orderPlacedStep ? safeGetDate(orderPlacedStep.timestamp) : createdTime;
+
+  // 2. Ensure "Picked up by Driver" or similar pickup step is present for shipped or delivered orders
+  if (order.status === 'shipped' || order.status === 'delivered') {
+    const hasPickup = resolvedMovement.some(m => {
+      const s = (m.status || '').toLowerCase();
+      return s.includes('ship') || s.includes('transit') || s.includes('pick');
+    });
+    if (!hasPickup) {
+      const shippedTime = new Date(placementTime.getTime() + 1.5 * 3600 * 1000);
       resolvedMovement.push({
         status: 'Picked up by Driver',
         timestamp: shippedTime,
@@ -126,32 +212,25 @@ function getResolvedMovement(order: Order): any[] {
         description: 'Package picked up by dispatch driver for immediate transit.'
       } as any);
     }
+  }
 
-    if (order.status === 'delivered') {
+  // 3. Ensure "Delivered" or similar delivery step is present for delivered orders
+  if (order.status === 'delivered') {
+    const hasDelivery = resolvedMovement.some(m => {
+      const s = (m.status || '').toLowerCase();
+      return s.includes('deliver') || s.includes('received');
+    });
+    if (!hasDelivery) {
       const deliveryDate = getDeliveryDate();
       const deliveredTime = deliveryDate && !isNaN(deliveryDate.getTime())
         ? deliveryDate
-        : new Date(createdTime.getTime() + 4 * 3600 * 1000);
+        : new Date(placementTime.getTime() + 4 * 3600 * 1000);
 
       resolvedMovement.push({
         status: 'Delivered',
         timestamp: deliveredTime,
         location: order.shippingAddress || 'Customer Reception',
         description: 'Package successfully delivered and received.'
-      } as any);
-    }
-  } else {
-    const hasOrderPlaced = resolvedMovement.some(m => {
-      const s = (m.status || '').toLowerCase();
-      return s.includes('place') || s.includes('create');
-    });
-    if (!hasOrderPlaced) {
-      const createdTime = safeGetDate(order.orderDate) || new Date();
-      resolvedMovement.push({
-        status: 'Order Placed',
-        timestamp: createdTime,
-        location: 'Khex Central Hub',
-        description: 'Your order was successfully created and logged.'
       } as any);
     }
   }
@@ -173,16 +252,63 @@ function getResolvedMovement(order: Order): any[] {
   });
 }
 
+function getMovementDate(order: Order, targetStatus: 'shipped' | 'delivered'): Date | null {
+  if (!order) return null;
+  
+  const resolvedMovement = getResolvedMovement(order);
+  
+  const safeGetDate = (date: any): Date => {
+    return universalParseDate(date) || new Date();
+  };
+
+  if (targetStatus === 'shipped') {
+    const step = resolvedMovement.find(m => {
+      const statusLower = (m.status || '').toLowerCase();
+      return statusLower.includes('ship') || statusLower.includes('transit') || statusLower.includes('pick');
+    });
+    if (step && step.timestamp) {
+      return safeGetDate(step.timestamp);
+    }
+  } else if (targetStatus === 'delivered') {
+    const step = resolvedMovement.find(m => {
+      const statusLower = (m.status || '').toLowerCase();
+      return statusLower.includes('deliver') || statusLower.includes('received');
+    });
+    if (step && step.timestamp) {
+      return safeGetDate(step.timestamp);
+    }
+  }
+  return null;
+}
+
+function isTimeFieldChanged(proposedStr: string, originalDate: Date | null): boolean {
+  const cleanProposed = (proposedStr || '').trim().toLowerCase();
+  
+  // Neutralize default components to avoid false edits
+  if (!cleanProposed || cleanProposed === 'n/a' || cleanProposed === 'none' || cleanProposed === '(none)' || cleanProposed === '-' || cleanProposed === 'no record') {
+    return false;
+  }
+  
+  if (!originalDate) {
+    return true;
+  }
+  
+  const proposedDate = universalParseDate(proposedStr);
+  if (!proposedDate) {
+    return false;
+  }
+  
+  // 5000ms threshold to prevent millisecond rounding issues or small variance after upload/export cycles
+  return Math.abs(proposedDate.getTime() - originalDate.getTime()) >= 5000;
+}
+
 function getMovementTime(order: Order, targetStatus: 'shipped' | 'delivered'): string {
   if (!order) return 'N/A';
   
   const resolvedMovement = getResolvedMovement(order);
   
   const safeGetDate = (date: any): Date => {
-    if (!date) return new Date();
-    if (typeof date.toDate === 'function') return date.toDate();
-    const d = new Date(date);
-    return isNaN(d.getTime()) ? new Date() : d;
+    return universalParseDate(date) || new Date();
   };
 
   if (targetStatus === 'shipped') {
@@ -226,11 +352,14 @@ interface BulkPreviewItem {
   proposedPickupTime?: string;
   originalReceivedTime?: string;
   proposedReceivedTime?: string;
+  originalLastLoggedStatus?: string;
+  proposedLastLoggedStatus?: string;
   originalItems?: any[];
   proposedItems?: any[];
   isValid: boolean;
   errors: string[];
   changesCount: number;
+  modifiedFields?: string[];
 }
 
 export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, statusFilter, triggerDownload, reportDepth }: {
@@ -368,7 +497,8 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
 
       targetOrders.forEach(o => {
         const dateStr = o.orderDate?.toDate ? o.orderDate.toDate().toLocaleString('en-GB') : new Date(o.orderDate || '').toLocaleString('en-GB');
-        const lastMove = o.movement && o.movement.length > 0 ? o.movement[o.movement.length - 1].status : "No record";
+        const resolvedMovement = getResolvedMovement(o);
+        const lastMove = resolvedMovement.length > 0 ? resolvedMovement[resolvedMovement.length - 1].status : "No record";
         const pickupStr = getMovementTime(o, 'shipped');
         const receivedStr = getMovementTime(o, 'delivered');
         
@@ -424,7 +554,8 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
 
       targetOrders.forEach(o => {
         const dateStr = o.orderDate?.toDate ? o.orderDate.toDate().toLocaleString('en-GB') : new Date(o.orderDate || '').toLocaleString('en-GB');
-        const lastMove = o.movement && o.movement.length > 0 ? o.movement[o.movement.length - 1].status : "No record";
+        const resolvedMovement = getResolvedMovement(o);
+        const lastMove = resolvedMovement.length > 0 ? resolvedMovement[resolvedMovement.length - 1].status : "No record";
         const pickupStr = getMovementTime(o, 'shipped');
         const receivedStr = getMovementTime(o, 'delivered');
         
@@ -493,6 +624,7 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
       const productNameIdx = headerRow.findIndex(h => h === 'product name' || h === 'product_name' || h === 'product' || h === 'item');
       const quantityIdx = headerRow.findIndex(h => h === 'quantity / units count' || h === 'quantity' || h === 'units' || h === 'units count' || h === 'qty');
       const serialsIdx = headerRow.findIndex(h => h === 'serial numbers list' || h === 'serial_numbers' || h === 'serial numbers' || h === 'serials');
+      const lastLoggedStatusIdx = headerRow.findIndex(h => h === 'last logged status' || h === 'last_logged_status' || h === 'last log status' || h === 'logged status' || h === 'last status');
 
       if (idIdx === -1) {
         throw new Error("Could not find required 'Order ID' column. Please download the correct template headers.");
@@ -509,6 +641,7 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
         remarks: string[];
         pickupTimes: string[];
         receivedTimes: string[];
+        lastLoggedStatuses: string[];
         csvItems: {
           productName: string;
           quantity: string;
@@ -536,6 +669,7 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
         const prodName = productNameIdx !== -1 ? (row[productNameIdx] || '').trim() : '';
         const qtyStr = quantityIdx !== -1 ? (row[quantityIdx] || '').trim() : '';
         const serialsStr = serialsIdx !== -1 ? (row[serialsIdx] || '').trim() : '';
+        const lastLogStat = lastLoggedStatusIdx !== -1 ? (row[lastLoggedStatusIdx] || '').trim() : '';
 
         if (!orderGroups.has(orderId)) {
           orderGroups.set(orderId, {
@@ -548,6 +682,7 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
             remarks: [],
             pickupTimes: [],
             receivedTimes: [],
+            lastLoggedStatuses: [],
             csvItems: []
           });
         }
@@ -562,6 +697,7 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
         if (rem) group.remarks.push(rem);
         if (pickupStr) group.pickupTimes.push(pickupStr);
         if (receivedStr) group.receivedTimes.push(receivedStr);
+        if (lastLogStat) group.lastLoggedStatuses.push(lastLogStat);
         if (prodName || qtyStr || serialsStr) {
           group.csvItems.push({
             productName: prodName,
@@ -587,43 +723,68 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
         let proposedRemark = group.remarks[0] || '';
         let proposedPickupTime = group.pickupTimes[0] || '';
         let proposedReceivedTime = group.receivedTimes[0] || '';
+        let proposedLastLoggedStatus = group.lastLoggedStatuses[0] || '';
 
         let finalStatus = (proposedStatusStr || '').toLowerCase();
+
+        const originalAddress = matched ? (matched.shippingAddress || '') : '';
+        const originalStatus = matched ? (matched.status || 'pending').toLowerCase() : '';
+        const originalTracking = matched ? (matched.trackingNumber || '') : '';
+
+        const matchedStatusLower = matched ? (matched.status || 'pending').toLowerCase() : '';
+        const originalDriver = matched ? (matched.driverName || ((matchedStatusLower === 'shipped' || matchedStatusLower === 'delivered') ? getDeterministicName(matched.id, 'driver', matched) : '')) : '';
+        const originalDeliveredBy = matched ? (matched.deliveredBy || (matchedStatusLower === 'delivered' ? (matched.driverName || getDeterministicName(matched.id, 'driver', matched)) : '')) : '';
+        const originalReceiver = matched ? (matched.receivingName || (matchedStatusLower === 'delivered' ? getDeterministicName(matched.id, 'receiver', matched) : '')) : '';
+
+        const originalRemark = matched ? (matched.remark || '') : '';
+        const originalPickupTime = matched ? getMovementTime(matched, 'shipped') : 'N/A';
+        const originalReceivedTime = matched ? getMovementTime(matched, 'delivered') : 'N/A';
+        const resolvedOriginalMovement = matched ? getResolvedMovement(matched) : [];
+        const originalLastLoggedStatus = resolvedOriginalMovement.length > 0
+          ? resolvedOriginalMovement[resolvedOriginalMovement.length - 1].status
+          : 'No record';
 
         if (!matched) {
           errors.push(`Order ID reference "${orderId}" could not be matched with any server record.`);
         } else {
           // If the CSV column has values, use the parsed one, otherwise fall back to matched value
-          if (locationIdx === -1 || group.addresses.length === 0) proposedAddress = matched.shippingAddress || '';
-          if (statusIdx === -1 || group.statuses.length === 0) {
-            finalStatus = (matched.status || 'pending').toLowerCase();
+          if (locationIdx === -1 || group.addresses.length === 0 || !isStringFieldChanged(proposedAddress, originalAddress)) {
+            proposedAddress = originalAddress;
           }
-          if (trackingIdx === -1 || group.trackings.length === 0) proposedTracking = matched.trackingNumber || '';
-          if (driverIdx === -1 || group.drivers.length === 0) proposedDriver = matched.driverName || '';
-          if (deliveredByIdx === -1 || group.deliveredBys.length === 0) proposedDeliveredBy = matched.deliveredBy || '';
-          if (receiverIdx === -1 || group.receivers.length === 0) proposedReceiver = matched.receivingName || '';
-          if (remarkIdx === -1 || group.remarks.length === 0) proposedRemark = matched.remark || '';
-          if (pickupTimeIdx === -1 || group.pickupTimes.length === 0) {
-            proposedPickupTime = getMovementTime(matched, 'shipped');
+          if (statusIdx === -1 || group.statuses.length === 0 || !isStringFieldChanged(proposedStatusStr, originalStatus)) {
+            finalStatus = originalStatus;
+          } else {
+            finalStatus = (proposedStatusStr || '').toLowerCase();
           }
-          if (receivedTimeIdx === -1 || group.receivedTimes.length === 0) {
-            proposedReceivedTime = getMovementTime(matched, 'delivered');
+          if (trackingIdx === -1 || group.trackings.length === 0 || !isStringFieldChanged(proposedTracking, originalTracking)) {
+            proposedTracking = originalTracking;
+          }
+          if (driverIdx === -1 || group.drivers.length === 0 || !isStringFieldChanged(proposedDriver, originalDriver)) {
+            proposedDriver = originalDriver;
+          }
+          if (deliveredByIdx === -1 || group.deliveredBys.length === 0 || !isStringFieldChanged(proposedDeliveredBy, originalDeliveredBy)) {
+            proposedDeliveredBy = originalDeliveredBy;
+          }
+          if (receiverIdx === -1 || group.receivers.length === 0 || !isStringFieldChanged(proposedReceiver, originalReceiver)) {
+            proposedReceiver = originalReceiver;
+          }
+          if (remarkIdx === -1 || group.remarks.length === 0 || !isStringFieldChanged(proposedRemark, originalRemark)) {
+            proposedRemark = originalRemark;
+          }
+          if (pickupTimeIdx === -1 || group.pickupTimes.length === 0 || !isTimeFieldChanged(proposedPickupTime, getMovementDate(matched, 'shipped'))) {
+            proposedPickupTime = originalPickupTime;
+          }
+          if (receivedTimeIdx === -1 || group.receivedTimes.length === 0 || !isTimeFieldChanged(proposedReceivedTime, getMovementDate(matched, 'delivered'))) {
+            proposedReceivedTime = originalReceivedTime;
+          }
+          if (lastLoggedStatusIdx === -1 || group.lastLoggedStatuses.length === 0 || !isStringFieldChanged(proposedLastLoggedStatus, originalLastLoggedStatus)) {
+            proposedLastLoggedStatus = originalLastLoggedStatus;
           }
 
           if (finalStatus && !['pending', 'shipped', 'delivered'].includes(finalStatus)) {
             errors.push(`Status value "${proposedStatusStr}" is invalid. Allowed: PENDING, SHIPPED, or DELIVERED.`);
           }
         }
-
-        const originalAddress = matched ? (matched.shippingAddress || '') : '';
-        const originalStatus = matched ? (matched.status || 'pending').toLowerCase() : '';
-        const originalTracking = matched ? (matched.trackingNumber || '') : '';
-        const originalDriver = matched ? (matched.driverName || '') : '';
-        const originalDeliveredBy = matched ? (matched.deliveredBy || '') : '';
-        const originalReceiver = matched ? (matched.receivingName || '') : '';
-        const originalRemark = matched ? (matched.remark || '') : '';
-        const originalPickupTime = matched ? getMovementTime(matched, 'shipped') : 'N/A';
-        const originalReceivedTime = matched ? getMovementTime(matched, 'delivered') : 'N/A';
 
         // Deep copy original items
         const originalItems = matched ? matched.items.map(item => ({
@@ -683,35 +844,54 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
           proposedItems = originalItems.map(item => ({ ...item }));
         }
 
+        const modifiedFields: string[] = [];
         let changesCount = 0;
         if (matched) {
-          if (proposedAddress && proposedAddress !== originalAddress) changesCount++;
-          if (finalStatus && finalStatus !== originalStatus) changesCount++;
-          if (proposedTracking && proposedTracking !== originalTracking) changesCount++;
-          if (proposedDriver && proposedDriver !== originalDriver) changesCount++;
-          if (proposedDeliveredBy && proposedDeliveredBy !== originalDeliveredBy) changesCount++;
-          if (proposedReceiver && proposedReceiver !== originalReceiver) changesCount++;
-          if (proposedRemark !== originalRemark) changesCount++;
-          if (proposedPickupTime && proposedPickupTime !== 'N/A' && proposedPickupTime !== originalPickupTime) changesCount++;
-          if (proposedReceivedTime && proposedReceivedTime !== 'N/A' && proposedReceivedTime !== originalReceivedTime) changesCount++;
-
-          // Items changed check
-          let itemsChanged = false;
-          if (proposedItems.length !== originalItems.length) {
-            itemsChanged = true;
-          } else {
-            for (let i = 0; i < originalItems.length; i++) {
-              const orig = originalItems[i];
-              const prop = proposedItems[i];
-              if (orig.name !== prop.name) itemsChanged = true;
-              if (orig.quantity !== prop.quantity) itemsChanged = true;
-              const origSerials = (orig.serialNumbers || []).join('; ');
-              const propSerials = (prop.serialNumbers || []).join('; ');
-              if (origSerials !== propSerials) itemsChanged = true;
-            }
+          if (isStringFieldChanged(proposedAddress, originalAddress)) {
+            changesCount++;
+            modifiedFields.push('Address');
           }
+          if (isStringFieldChanged(finalStatus, originalStatus)) {
+            changesCount++;
+            modifiedFields.push('Status');
+          }
+          if (isStringFieldChanged(proposedTracking, originalTracking)) {
+            changesCount++;
+            modifiedFields.push('Tracking Number');
+          }
+          if (isStringFieldChanged(proposedDriver, originalDriver)) {
+            changesCount++;
+            modifiedFields.push('Driver Name');
+          }
+          if (isStringFieldChanged(proposedDeliveredBy, originalDeliveredBy)) {
+            changesCount++;
+            modifiedFields.push('Delivered By');
+          }
+          if (isStringFieldChanged(proposedReceiver, originalReceiver)) {
+            changesCount++;
+            modifiedFields.push('Receiving Name');
+          }
+          if (isStringFieldChanged(proposedRemark, originalRemark)) {
+            changesCount++;
+            modifiedFields.push('Remark');
+          }
+          if (isStringFieldChanged(proposedPickupTime, originalPickupTime)) {
+            changesCount++;
+            modifiedFields.push('Pickup Time');
+          }
+          if (isStringFieldChanged(proposedReceivedTime, originalReceivedTime)) {
+            changesCount++;
+            modifiedFields.push('Received Time');
+          }
+          if (isStringFieldChanged(proposedLastLoggedStatus, originalLastLoggedStatus)) {
+            changesCount++;
+            modifiedFields.push('Last Logged Status');
+          }
+
+          const itemsChanged = compareItems(originalItems, proposedItems);
           if (itemsChanged) {
             changesCount++;
+            modifiedFields.push('Items');
           }
         }
 
@@ -735,11 +915,14 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
           proposedPickupTime,
           originalReceivedTime,
           proposedReceivedTime,
+          originalLastLoggedStatus,
+          proposedLastLoggedStatus: proposedLastLoggedStatus || originalLastLoggedStatus,
           originalItems,
           proposedItems,
           isValid: errors.length === 0,
           errors,
-          changesCount
+          changesCount,
+          modifiedFields
         });
       }
 
@@ -798,6 +981,10 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
 
     setIsUpdating(true);
     setUpdateProgress({ current: 0, total: validUpdates.length });
+    setUploadError(null);
+
+    let failCount = 0;
+    let lastErrorMessage = "";
 
     for (let i = 0; i < validUpdates.length; i++) {
       const item = validUpdates[i];
@@ -808,31 +995,47 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
           updatedAt: serverTimestamp()
         };
 
-        if (item.proposedAddress !== item.originalAddress) {
-          fieldsToUpdate.shippingAddress = item.proposedAddress;
-          fieldsToUpdate.location = item.proposedAddress;
+        if (isStringFieldChanged(item.proposedAddress, item.originalAddress)) {
+          fieldsToUpdate.shippingAddress = item.proposedAddress.trim();
+          fieldsToUpdate.location = item.proposedAddress.trim();
         }
-        if (item.proposedStatus !== item.originalStatus) {
+        if (isStringFieldChanged(item.proposedStatus, item.originalStatus)) {
           fieldsToUpdate.status = item.proposedStatus;
         }
-        if (item.proposedTracking !== item.originalTracking) {
-          fieldsToUpdate.trackingNumber = item.proposedTracking;
+        if (isStringFieldChanged(item.proposedTracking, item.originalTracking)) {
+          fieldsToUpdate.trackingNumber = item.proposedTracking.trim();
         }
-        if (item.proposedDriver !== item.originalDriver) {
-          fieldsToUpdate.driverName = item.proposedDriver;
+        if (isStringFieldChanged(item.proposedDriver, item.originalDriver)) {
+          fieldsToUpdate.driverName = item.proposedDriver.trim();
         }
-        if (item.proposedDeliveredBy !== item.originalDeliveredBy) {
-          fieldsToUpdate.deliveredBy = item.proposedDeliveredBy;
+        if (isStringFieldChanged(item.proposedDeliveredBy, item.originalDeliveredBy)) {
+          fieldsToUpdate.deliveredBy = item.proposedDeliveredBy.trim();
         }
-        if (item.proposedReceiver !== item.originalReceiver) {
-          fieldsToUpdate.receivingName = item.proposedReceiver;
+        if (isStringFieldChanged(item.proposedReceiver, item.originalReceiver)) {
+          fieldsToUpdate.receivingName = item.proposedReceiver.trim();
         }
-        if (item.proposedRemark !== item.originalRemark) {
-          fieldsToUpdate.remark = item.proposedRemark;
+        if (isStringFieldChanged(item.proposedRemark, item.originalRemark)) {
+          fieldsToUpdate.remark = item.proposedRemark.trim();
         }
 
-        if (item.proposedItems && JSON.stringify(item.proposedItems) !== JSON.stringify(item.originalItems)) {
-          fieldsToUpdate.items = item.proposedItems;
+        if (item.proposedItems && compareItems(item.originalItems, item.proposedItems)) {
+          const itemsMap: Record<string, any> = {};
+          let totalItemsVal = 0;
+          let uniqueItemsVal = 0;
+          
+          item.proposedItems.forEach((pItem: any) => {
+            totalItemsVal += Number(pItem.quantity);
+            uniqueItemsVal++;
+            itemsMap[pItem.name] = {
+              count: Number(pItem.quantity),
+              firstSeen: formatTimeAMPM(new Date(), true),
+              serialNumbers: pItem.serialNumbers || []
+            };
+          });
+          
+          fieldsToUpdate.items = itemsMap;
+          fieldsToUpdate.totalItems = totalItemsVal;
+          fieldsToUpdate.uniqueItems = uniqueItemsVal;
         }
 
         // Handle movement updates for pickup/received times
@@ -842,7 +1045,7 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
           let movementChanged = false;
 
           // 1. Check pickup step
-          if (item.proposedPickupTime && item.proposedPickupTime !== 'N/A' && item.proposedPickupTime !== item.originalPickupTime) {
+          if (isStringFieldChanged(item.proposedPickupTime, item.originalPickupTime)) {
             let pickupStepIdx = movementToUpdate.findIndex(m => {
               const sl = (m.status || '').toLowerCase();
               return sl.includes('ship') || sl.includes('transit') || sl.includes('pick');
@@ -894,7 +1097,7 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
           }
 
           // 2. Check received step
-          if (item.proposedReceivedTime && item.proposedReceivedTime !== 'N/A' && item.proposedReceivedTime !== item.originalReceivedTime) {
+          if (isStringFieldChanged(item.proposedReceivedTime, item.originalReceivedTime)) {
             let receivedStepIdx = movementToUpdate.findIndex(m => {
               const sl = (m.status || '').toLowerCase();
               return sl.includes('deliver') || sl.includes('received');
@@ -945,21 +1148,87 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
             }
           }
 
+          // 3. Check last logged status updates
+          if (isStringFieldChanged(item.proposedLastLoggedStatus, item.originalLastLoggedStatus)) {
+            const proposedLower = (item.proposedLastLoggedStatus || '').toLowerCase();
+            const lastItem = movementToUpdate.length > 0 ? movementToUpdate[movementToUpdate.length - 1] : null;
+            const lastStatusLower = lastItem ? (lastItem.status || '').toLowerCase() : '';
+
+            // Check if we can safely update the existing last step status to avoid corrupting previous milestones
+            const isLastDelivered = lastStatusLower.includes('deliver') || lastStatusLower.includes('received');
+            const isLastShipped = lastStatusLower.includes('ship') || lastStatusLower.includes('transit') || lastStatusLower.includes('pick');
+            const isLastPlaced = lastStatusLower.includes('place') || lastStatusLower.includes('create');
+
+            const isProposedDelivered = proposedLower.includes('deliver') || proposedLower.includes('received');
+            const isProposedShipped = proposedLower.includes('ship') || proposedLower.includes('transit') || proposedLower.includes('pick');
+            const isProposedPlaced = proposedLower.includes('place') || proposedLower.includes('create');
+
+            let canOverwrite = false;
+            if (isLastDelivered && isProposedDelivered) canOverwrite = true;
+            if (isLastShipped && isProposedShipped) canOverwrite = true;
+            if (isLastPlaced && isProposedPlaced) canOverwrite = true;
+            if (lastStatusLower === proposedLower) canOverwrite = true;
+
+            if (canOverwrite && lastItem) {
+              lastItem.status = item.proposedLastLoggedStatus;
+            } else {
+              // Append a new milestone step instead of corrupting an existing one
+              if (isProposedDelivered) {
+                const hasDel = movementToUpdate.some(m => (m.status || '').toLowerCase().includes('deliver') || (m.status || '').toLowerCase().includes('received'));
+                if (!hasDel) {
+                  movementToUpdate.push({
+                    status: item.proposedLastLoggedStatus,
+                    timestamp: new Date(),
+                    location: item.proposedAddress || matched.shippingAddress || 'Customer Reception',
+                    description: 'Package successfully delivered and received.'
+                  });
+                }
+              } else if (isProposedShipped) {
+                const hasShip = movementToUpdate.some(m => {
+                  const sl = (m.status || '').toLowerCase();
+                  return sl.includes('ship') || sl.includes('transit') || sl.includes('pick');
+                });
+                if (!hasShip) {
+                  movementToUpdate.push({
+                    status: item.proposedLastLoggedStatus,
+                    timestamp: new Date(),
+                    location: 'Khex Sorting Facility',
+                    description: 'Package picked up by dispatch driver for immediate transit.'
+                  });
+                }
+              } else {
+                movementToUpdate.push({
+                  status: item.proposedLastLoggedStatus,
+                  timestamp: new Date(),
+                  location: item.proposedAddress || matched.shippingAddress || 'Khex Facility',
+                  description: 'Status logged via bulk synchronization update.'
+                });
+              }
+            }
+            movementChanged = true;
+          }
+
           if (movementChanged) {
             fieldsToUpdate.movement = movementToUpdate;
           }
         }
 
         await updateDoc(orderRef, fieldsToUpdate);
-      } catch (err) {
+      } catch (err: any) {
         console.error(`Failed to update Order #${item.orderId}:`, err);
+        failCount++;
+        lastErrorMessage = err.message || String(err);
       }
       setUpdateProgress(prev => ({ ...prev, current: i + 1 }));
     }
 
     setIsUpdating(false);
-    setUpdateSuccessMessage(`SUCCESS: Bulk synchronization completed! ${validUpdates.length} manifests modified on central nodes.`);
-    setPreviewItems([]);
+    if (failCount > 0) {
+      setUploadError(`Failed to apply updates for ${failCount} of ${validUpdates.length} manifests. Error: ${lastErrorMessage}`);
+    } else {
+      setUpdateSuccessMessage(`SUCCESS: Bulk synchronization completed! ${validUpdates.length} manifests modified on central nodes.`);
+      setPreviewItems([]);
+    }
   };
 
   const totalModifications = previewItems.filter(item => item.isValid && item.changesCount > 0).length;
@@ -1104,6 +1373,7 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
                   <th className="p-3">Order ID</th>
                   <th className="p-3">Location Shift</th>
                   <th className="p-3">Status</th>
+                  <th className="p-3">Last Logged Status</th>
                   <th className="p-3">AWB Track</th>
                   <th className="p-3">Driver Assigned</th>
                   <th className="p-3">State / Reason</th>
@@ -1145,6 +1415,17 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
                         )}
                       </td>
 
+                      <td className="p-3 font-bold text-center">
+                        {item.proposedLastLoggedStatus !== item.originalLastLoggedStatus ? (
+                          <div className="flex flex-col items-center">
+                            <span className="text-[10px] line-through text-black/30 leading-none">{item.originalLastLoggedStatus}</span>
+                            <span className="text-violet-600 font-extrabold leading-normal">{item.proposedLastLoggedStatus}</span>
+                          </div>
+                        ) : (
+                          <span className="text-black/60">{item.proposedLastLoggedStatus || 'No record'}</span>
+                        )}
+                      </td>
+
                       <td className="p-3 font-mono">
                         {item.proposedTracking !== item.originalTracking ? (
                           <div className="flex flex-col">
@@ -1174,9 +1455,16 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
                               No Changes
                             </span>
                           ) : (
-                            <span className="bg-[#FF9800]/10 text-[#E65100] text-[9px] font-black px-2 py-0.5 rounded-full uppercase">
-                              {item.changesCount} Edits detected
-                            </span>
+                            <div className="flex flex-col gap-0.5 items-start">
+                              <span className="bg-[#FF9800]/10 text-[#E65100] text-[9px] font-black px-2 py-0.5 rounded-full uppercase">
+                                {item.changesCount} Edits detected
+                              </span>
+                              {item.modifiedFields && item.modifiedFields.length > 0 && (
+                                <span className="text-[8px] text-black/40 font-mono leading-tight whitespace-nowrap">
+                                  ({item.modifiedFields.join(', ')})
+                                </span>
+                              )}
+                            </div>
                           )
                         ) : (
                           <span className="text-red-600 text-[10px] font-extrabold uppercase tracking-tighter flex flex-col gap-0.5">
@@ -1294,7 +1582,8 @@ export default function ReportExportCard({ orders }: ReportExportCardProps) {
 
         targetOrders.forEach(o => {
           const dateStr = o.orderDate?.toDate ? o.orderDate.toDate().toLocaleString('en-GB') : new Date(o.orderDate || '').toLocaleString('en-GB');
-          const lastMove = o.movement && o.movement.length > 0 ? o.movement[o.movement.length - 1].status : "No record";
+          const resolvedMovement = getResolvedMovement(o);
+          const lastMove = resolvedMovement.length > 0 ? resolvedMovement[resolvedMovement.length - 1].status : "No record";
           const pickupStr = getMovementTime(o, 'shipped');
           const receivedStr = getMovementTime(o, 'delivered');
           
@@ -1354,7 +1643,8 @@ export default function ReportExportCard({ orders }: ReportExportCardProps) {
 
         targetOrders.forEach(o => {
           const dateStr = o.orderDate?.toDate ? o.orderDate.toDate().toLocaleString('en-GB') : new Date(o.orderDate || '').toLocaleString('en-GB');
-          const lastMove = o.movement && o.movement.length > 0 ? o.movement[o.movement.length - 1].status : "No record";
+          const resolvedMovement = getResolvedMovement(o);
+          const lastMove = resolvedMovement.length > 0 ? resolvedMovement[resolvedMovement.length - 1].status : "No record";
           const pickupStr = getMovementTime(o, 'shipped');
           const receivedStr = getMovementTime(o, 'delivered');
           

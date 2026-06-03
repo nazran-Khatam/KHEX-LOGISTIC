@@ -375,7 +375,7 @@ export default function Dashboard({ orders, user, onLogout }: DashboardProps) {
             {/* Custom Premium Stats Card with Cream Background */}
             <div className="bg-[#FAF6F0] px-6 py-2.5 rounded-[18px] flex items-center gap-6 shadow-md border border-neutral-100 flex-shrink-0">
               <div className="text-center px-1">
-                <p className="text-[10px] font-bold text-[#8B7E6F] tracking-widest uppercase mb-1">UNITS</p>
+                <p className="text-[10px] font-bold text-[#8B7E6F] tracking-widest uppercase mb-1">ORDERS</p>
                 <p className="text-xl font-bold font-sans text-black leading-none">{stats.all}</p>
               </div>
               <div className="w-px h-8 bg-black/10"></div>
@@ -385,7 +385,7 @@ export default function Dashboard({ orders, user, onLogout }: DashboardProps) {
               </div>
               <div className="w-px h-8 bg-black/10"></div>
               <div className="text-center px-1">
-                <p className="text-[10px] font-bold text-[#8B7E6F] tracking-widest uppercase mb-1">COMPLETE</p>
+                <p className="text-[10px] font-bold text-[#8B7E6F] tracking-widest uppercase mb-1">DELIVERED</p>
                 <p className="text-xl font-bold font-sans text-black leading-none">{stats.delivered}</p>
               </div>
             </div>
