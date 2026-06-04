@@ -5,7 +5,7 @@ import {
   PieChart, Pie, Cell, Legend
 } from 'recharts';
 import { motion } from 'motion/react';
-import { Package, TrendingUp, AlertCircle, Clock, Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Package, TrendingUp, AlertCircle, Clock, Calendar, ChevronLeft, ChevronRight, List, Truck } from 'lucide-react';
 
 interface OverviewDashboardProps {
   orders: Order[];
@@ -246,6 +246,33 @@ export default function OverviewDashboard({
 
   const [monthViewType, setMonthViewType] = useState<'both' | 'orders' | 'units'>('both');
   const [locationViewType, setLocationViewType] = useState<'both' | 'orders' | 'units'>('both');
+  const [sortField, setSortField] = useState<'name' | 'orders' | 'pending' | 'delivered' | 'units' | 'minTime' | 'maxTime' | null>(null);
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
+
+  const handleSort = (field: 'name' | 'orders' | 'pending' | 'delivered' | 'units' | 'minTime' | 'maxTime') => {
+    if (sortField === field) {
+      if (sortDirection === 'desc') {
+        setSortDirection('asc');
+      } else {
+        setSortField(null);
+        setSortDirection('desc');
+      }
+    } else {
+      setSortField(field);
+      setSortDirection('desc');
+    }
+  };
+
+  const renderSortIndicator = (field: 'name' | 'orders' | 'pending' | 'delivered' | 'units' | 'minTime' | 'maxTime') => {
+    if (sortField !== field) {
+      return <span className="opacity-0 group-hover:opacity-40 transition-opacity ml-1 inline-block select-none">↕</span>;
+    }
+    return (
+      <span className="ml-1 text-slate-800 font-extrabold inline-block select-none text-[11px]">
+        {sortDirection === 'asc' ? '↑' : '↓'}
+      </span>
+    );
+  };
 
   const getOrderDate = (order: Order): Date | null => {
     return universalParseDate(order.orderDate);
@@ -344,6 +371,10 @@ export default function OverviewDashboard({
     acc + order.items.reduce((sum, item) => sum + (item.price * item.quantity), 0), 0
   );
 
+  const totalUnits = displayOrders.reduce((acc, order) => 
+    acc + (order.items ? order.items.reduce((sum, item) => sum + (item.quantity || 0), 0) : 0), 0
+  );
+
   // Average Delivery Time Calculation (Pickup Time to Received Time)
   const getDate = (date: any) => {
     return universalParseDate(date);
@@ -429,11 +460,69 @@ export default function OverviewDashboard({
         units: stats.units,
         pending: stats.pending,
         delivered: stats.delivered,
+        minVal,
+        maxVal,
         minTime: minVal !== null ? formatDuration(minVal) : '-',
         maxTime: maxVal !== null ? formatDuration(maxVal) : '-'
       };
-    })
-    .sort((a, b) => b.orders - a.orders);
+    });
+
+  if (sortField) {
+    locationData.sort((a, b) => {
+      let comparison = 0;
+      if (sortField === 'name') {
+        comparison = a.name.localeCompare(b.name);
+      } else if (sortField === 'orders') {
+        comparison = a.orders - b.orders;
+      } else if (sortField === 'pending') {
+        comparison = a.pending - b.pending;
+      } else if (sortField === 'delivered') {
+        comparison = a.delivered - b.delivered;
+      } else if (sortField === 'units') {
+        comparison = a.units - b.units;
+      } else if (sortField === 'minTime') {
+        const valA = a.minVal === null ? (sortDirection === 'asc' ? Infinity : -Infinity) : a.minVal;
+        const valB = b.minVal === null ? (sortDirection === 'asc' ? Infinity : -Infinity) : b.minVal;
+        comparison = valA - valB;
+      } else if (sortField === 'maxTime') {
+        const valA = a.maxVal === null ? (sortDirection === 'asc' ? Infinity : -Infinity) : a.maxVal;
+        const valB = b.maxVal === null ? (sortDirection === 'asc' ? Infinity : -Infinity) : b.maxVal;
+        comparison = valA - valB;
+      }
+      return sortDirection === 'asc' ? comparison : -comparison;
+    });
+  } else {
+    locationData.sort((a, b) => b.orders - a.orders);
+  }
+
+  // Dynamic axis scaling & ticks matching the target image (0, 9, 18, 27, 36)
+  const activeMax = locationData.length > 0
+    ? Math.max(
+        ...locationData.map(d => {
+          if (locationViewType === 'orders') return d.orders || 0;
+          if (locationViewType === 'units') return d.units || 0;
+          return Math.max(d.units || 0, d.orders || 0);
+        })
+      )
+    : 36;
+
+  const getNiceTicks = (max: number, viewType: string) => {
+    if (viewType === 'units' || viewType === 'both') {
+      if (max <= 36) {
+        return [0, 9, 18, 27, 36];
+      }
+      const roundedMax = Math.ceil(max / 8) * 8;
+      const step = roundedMax / 4;
+      return [0, Math.round(step), Math.round(step * 2), Math.round(step * 3), roundedMax];
+    } else {
+      const roundedMax = Math.max(4, Math.ceil(max / 4) * 4);
+      const step = roundedMax / 4;
+      return [0, step, step * 2, step * 3, roundedMax];
+    }
+  };
+
+  const chartTicks = getNiceTicks(activeMax, locationViewType);
+  const chartDomain = [0, chartTicks[chartTicks.length - 1]];
 
   return (
     <motion.div 
@@ -444,21 +533,21 @@ export default function OverviewDashboard({
       {/* Metrics Grid */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         <MetricCard 
-          icon={<Package className="w-5 h-5 text-blue-600" />}
+          icon={<List className="w-5 h-5 text-blue-600" />}
           label="Total Orders"
           value={displayOrders.length}
           subValue="Active Lifecycle"
           iconBgClass="bg-blue-50/80 border border-blue-100/30"
         />
         <MetricCard 
-          icon={<TrendingUp className="w-5 h-5 text-emerald-600" />}
-          label="Total Value"
-          value={`$${totalValue.toLocaleString()}`}
-          subValue="Revenue Flow"
+          icon={<Package className="w-5 h-5 text-emerald-600" />}
+          label="Total Units"
+          value={totalUnits.toLocaleString()}
+          subValue="Unit of Bag"
           iconBgClass="bg-emerald-50/80 border border-emerald-100/30"
         />
         <MetricCard 
-          icon={<AlertCircle className="w-5 h-5 text-amber-600" />}
+          icon={<Truck className="w-5 h-5 text-amber-600" />}
           label="In Transit"
           value={displayOrders.filter(o => o.status === 'shipped').length}
           subValue="Active Shipments"
@@ -642,13 +731,69 @@ export default function OverviewDashboard({
             <table className="w-full text-left">
               <thead>
                 <tr className="border-b border-black/5">
-                  <th className="pb-4 text-[10px] font-black uppercase tracking-widest text-black/30">Location</th>
-                  <th className="pb-4 text-[10px] font-black uppercase tracking-widest text-black/30 text-center">Orders</th>
-                  <th className="pb-4 text-[10px] font-black uppercase tracking-widest text-black/30 text-center">Pending</th>
-                  <th className="pb-4 text-[10px] font-black uppercase tracking-widest text-black/30 text-center">Delivered</th>
-                  <th className="pb-4 text-[10px] font-black uppercase tracking-widest text-black/30 text-center">Total Units</th>
-                  <th className="pb-4 text-[10px] font-black uppercase tracking-widest text-black/30 text-center">Min Time</th>
-                  <th className="pb-4 text-[10px] font-black uppercase tracking-widest text-black/30 text-center">Max Time</th>
+                  <th 
+                    onClick={() => handleSort('name')}
+                    className="pb-4 text-[10px] font-black uppercase tracking-widest text-black/30 hover:text-black/70 cursor-pointer select-none transition-colors group text-left"
+                  >
+                    <span className="inline-flex items-center">
+                      Location
+                      {renderSortIndicator('name')}
+                    </span>
+                  </th>
+                  <th 
+                    onClick={() => handleSort('orders')}
+                    className="pb-4 text-[10px] font-black uppercase tracking-widest text-black/30 hover:text-black/70 cursor-pointer select-none transition-colors group text-center"
+                  >
+                    <span className="inline-flex items-center justify-center">
+                      Orders
+                      {renderSortIndicator('orders')}
+                    </span>
+                  </th>
+                  <th 
+                    onClick={() => handleSort('pending')}
+                    className="pb-4 text-[10px] font-black uppercase tracking-widest text-black/30 hover:text-black/70 cursor-pointer select-none transition-colors group text-center"
+                  >
+                    <span className="inline-flex items-center justify-center">
+                      Pending
+                      {renderSortIndicator('pending')}
+                    </span>
+                  </th>
+                  <th 
+                    onClick={() => handleSort('delivered')}
+                    className="pb-4 text-[10px] font-black uppercase tracking-widest text-black/30 hover:text-black/70 cursor-pointer select-none transition-colors group text-center"
+                  >
+                    <span className="inline-flex items-center justify-center">
+                      Delivered
+                      {renderSortIndicator('delivered')}
+                    </span>
+                  </th>
+                  <th 
+                    onClick={() => handleSort('units')}
+                    className="pb-4 text-[10px] font-black uppercase tracking-widest text-black/30 hover:text-black/70 cursor-pointer select-none transition-colors group text-center"
+                  >
+                    <span className="inline-flex items-center justify-center">
+                      Total Units
+                      {renderSortIndicator('units')}
+                    </span>
+                  </th>
+                  <th 
+                    onClick={() => handleSort('minTime')}
+                    className="pb-4 text-[10px] font-black uppercase tracking-widest text-black/30 hover:text-black/70 cursor-pointer select-none transition-colors group text-center"
+                  >
+                    <span className="inline-flex items-center justify-center">
+                      Min Time
+                      {renderSortIndicator('minTime')}
+                    </span>
+                  </th>
+                  <th 
+                    onClick={() => handleSort('maxTime')}
+                    className="pb-4 text-[10px] font-black uppercase tracking-widest text-black/30 hover:text-black/70 cursor-pointer select-none transition-colors group text-center"
+                  >
+                    <span className="inline-flex items-center justify-center">
+                      Max Time
+                      {renderSortIndicator('maxTime')}
+                    </span>
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-black/5">
@@ -670,70 +815,97 @@ export default function OverviewDashboard({
 
         {/* Volume by Location (Orders & Total Units) */}
         <div className="bg-white p-8 rounded-3xl shadow-sm border border-black/5 lg:col-span-1">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between items-start gap-4 mb-8">
-            <h4 className="text-xs font-black uppercase tracking-[0.3em] text-black/40">Volume by Location</h4>
+          <div className="flex flex-col gap-4 mb-6 mt-2">
+            <h4 className="text-[13px] font-black uppercase tracking-[0.25em] text-[#5e7085]/90 select-none font-sans">
+              VOLUME BY LOCATION
+            </h4>
             
             {/* Filter Pill Buttons */ }
-            <div className="flex bg-neutral-100 p-0.5 rounded-full border border-neutral-200/50" >
+            <div className="flex bg-[#f4f4f6] p-1 rounded-full border border-gray-200/50 select-none gap-0.5 self-start" >
               <button 
                 onClick={() => setLocationViewType('both')}
-                className={`px-3.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider transition-all duration-150 flex items-center gap-1 ${
+                className={`px-3.5 py-1.5 rounded-full text-[10px] uppercase tracking-wider transition-all duration-200 flex items-center gap-1.5 ${
                   locationViewType === 'both' 
-                    ? 'bg-white text-neutral-800 shadow-[0_2px_4px_rgba(0,0,0,0.04)]' 
-                    : 'text-neutral-400 hover:text-neutral-600'
+                    ? 'bg-white text-slate-800 shadow-[0_2px_8px_rgba(0,0,0,0.06)] font-black border border-neutral-100' 
+                    : 'text-neutral-400 hover:text-neutral-600 font-bold'
                 }`}
               >
-                Both
+                <span className="w-1.5 h-1.5 rounded-full bg-neutral-400 transition-all duration-200" />
+                BOTH
               </button>
               <button 
                 onClick={() => setLocationViewType('orders')}
-                className={`px-3.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider transition-all duration-150 flex items-center gap-1 ${
+                className={`px-3.5 py-1.5 rounded-full text-[10px] uppercase tracking-wider transition-all duration-200 flex items-center gap-1.5 ${
                   locationViewType === 'orders' 
-                    ? 'bg-white text-blue-600 shadow-[0_2px_4px_rgba(0,0,0,0.04)]' 
-                    : 'text-neutral-400 hover:text-neutral-600'
+                    ? 'bg-white text-blue-600 shadow-[0_2px_8px_rgba(0,0,0,0.06)] font-black border border-neutral-100' 
+                    : 'text-blue-500/50 hover:text-blue-600 font-bold'
                 }`}
               >
-                Orders
+                <span className="w-1.5 h-1.5 rounded-full bg-[#3b82f6] transition-all duration-200" />
+                ORDERS
               </button>
               <button 
                 onClick={() => setLocationViewType('units')}
-                className={`px-3.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider transition-all duration-150 flex items-center gap-1 ${
+                className={`px-3.5 py-1.5 rounded-full text-[10px] uppercase tracking-wider transition-all duration-200 flex items-center gap-1.5 ${
                   locationViewType === 'units' 
-                    ? 'bg-white text-emerald-600 shadow-[0_2px_4px_rgba(0,0,0,0.04)]' 
-                    : 'text-neutral-400 hover:text-neutral-600'
+                    ? 'bg-white text-emerald-600 shadow-[0_2px_8px_rgba(0,0,0,0.06)] font-black border border-neutral-100' 
+                    : 'text-emerald-500/50 hover:text-emerald-600 font-bold'
                 }`}
               >
-                Units
+                <span className="w-1.5 h-1.5 rounded-full bg-[#10b981] transition-all duration-200" />
+                UNITS
               </button>
             </div>
           </div>
+
+          {/* Custom Image-Matched Legend */}
+          <div className="flex items-center gap-6 mb-8 px-1 select-none">
+            {locationViewType !== 'units' && (
+              <div className="flex items-center gap-2">
+                <span className="w-3.5 h-3.5 rounded-full bg-[#3b82f6] shadow-sm" />
+                <span className="text-[12.5px] font-extrabold text-[#3b82f6]">Quantity Orders</span>
+              </div>
+            )}
+            {locationViewType !== 'orders' && (
+              <div className="flex items-center gap-2">
+                <span className="w-3.5 h-3.5 rounded-full bg-[#10b981] shadow-sm" />
+                <span className="text-[12.5px] font-extrabold text-[#10b981]">Total Units</span>
+              </div>
+            )}
+          </div>
+
           {locationData.length === 0 ? (
             <div className="h-[250px] flex flex-col items-center justify-center border border-dashed border-black/10 rounded-2xl bg-black/[0.01]">
               <span className="text-xs font-mono text-black/30">No location records in this time range</span>
             </div>
           ) : (
-            <div className="h-[520px] w-full">
+            <div className="h-[600px] w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart 
                   layout="vertical"
                   data={locationData}
-                  margin={{ left: 5, right: 5, top: 0, bottom: 5 }}
+                  margin={{ left: 5, right: 15, top: 0, bottom: 5 }}
+                  barGap={4}
+                  barCategoryGap="18%"
                 >
                   <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
                   <YAxis 
                     dataKey="name" 
                     type="category"
+                    scale="band"
                     axisLine={false} 
                     tickLine={false} 
-                    tick={{ fontSize: 10, fontWeight: 700, fill: '#64748b' }}
-                    width={80}
+                    tick={{ fontSize: 11, fontWeight: 700, fill: '#475569' }}
+                    width={85}
                   />
                   <XAxis 
                     type="number"
                     orientation="bottom"
                     axisLine={false} 
                     tickLine={false} 
-                    tick={{ fontSize: 9, fontWeight: 700, fill: '#64748b' }}
+                    tick={{ fontSize: 11, fontWeight: 700, fill: '#64748b' }}
+                    ticks={chartTicks}
+                    domain={chartDomain}
                   />
                   <Tooltip 
                     cursor={{ fill: '#f8fafc' }}
@@ -746,28 +918,21 @@ export default function OverviewDashboard({
                       fontWeight: 'bold'
                     }}
                   />
-                  <Legend 
-                    verticalAlign="top" 
-                    align="left"
-                    height={40} 
-                    iconType="circle"
-                    wrapperStyle={{ fontSize: '11px', fontWeight: 'bold', paddingBottom: '15px' }}
-                  />
                   <Bar 
                     name="Quantity Orders"
                     dataKey="orders" 
                     hide={locationViewType === 'units'}
-                    radius={[0, 6, 6, 0]}
+                    radius={[0, 10, 10, 0]}
                     fill="#3b82f6"
-                    barSize={8}
+                    barSize={locationViewType === 'both' ? 10 : 18}
                   />
                   <Bar 
                     name="Total Units"
                     dataKey="units" 
                     hide={locationViewType === 'orders'}
-                    radius={[0, 6, 6, 0]}
+                    radius={[0, 10, 10, 0]}
                     fill="#10b981"
-                    barSize={8}
+                    barSize={locationViewType === 'both' ? 10 : 18}
                   />
                 </BarChart>
               </ResponsiveContainer>

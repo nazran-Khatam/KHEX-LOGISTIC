@@ -303,7 +303,7 @@ export default function Dashboard({ orders, user, onLogout }: DashboardProps) {
             onClick={() => setActiveTab('all')}
             icon={<LayoutDashboard className="w-4 h-4" />}
             label="Overview"
-            count={stats.all}
+            count={0}
           />
           <NavItem 
             active={activeTab === 'create'} 
@@ -822,10 +822,10 @@ function NavItem({ active, onClick, icon, label, count }: any) {
     <button 
       onClick={onClick}
       className={cn(
-        "w-full flex items-center justify-between px-3 py-3 rounded transition-all",
+        "w-full flex items-center justify-between px-3.5 py-3 rounded-lg transition-all",
         active 
-          ? "bg-white text-black shadow-xl" 
-          : "text-white/30 hover:text-white"
+          ? "bg-white text-black shadow-xl font-bold" 
+          : "text-white/65 hover:text-white hover:bg-white/10"
       )}
     >
       <div className="flex items-center gap-3">
@@ -835,7 +835,7 @@ function NavItem({ active, onClick, icon, label, count }: any) {
       {count > 0 && (
         <span className={cn(
           "text-[9px] font-bold px-1.5 py-0.5 rounded border uppercase tracking-tighter",
-          active ? "bg-[#FF9800] border-[#FF9800] text-white" : "bg-transparent border-white/10 text-white/20"
+          active ? "bg-[#FF9800] border-[#FF9800] text-white" : "bg-transparent border-white/20 text-white/50"
         )}>
           {count}
         </span>
