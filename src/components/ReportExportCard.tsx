@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Order } from '../types';
-import { Download, FileSpreadsheet, FileJson, SlidersHorizontal, CheckCircle, Info, Upload, FileUp, RefreshCw, AlertTriangle, Trash2, Loader2, Check } from 'lucide-react';
+import { Download, FileSpreadsheet, FileJson, SlidersHorizontal, CheckCircle, Info, Upload, FileUp, RefreshCw, AlertTriangle, Trash2, Loader2, Check, Calendar, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
 import { motion } from 'motion/react';
 import { getDeterministicName } from './OrderDetails';
 import { universalParseDate } from './OverviewDashboard';
@@ -1514,7 +1514,150 @@ export default function ReportExportCard({ orders }: ReportExportCardProps) {
   const [reportDepth, setReportDepth] = useState<'detailed' | 'summary'>('detailed');
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'shipped' | 'delivered'>('all');
   const [locationFilter, setLocationFilter] = useState<string>('all');
+  const [startDate, setStartDate] = useState<string>('');
+  const [endDate, setEndDate] = useState<string>('');
   const [downloadSuccess, setDownloadSuccess] = useState(false);
+
+  // States and Helpers for the Custom Calendar Picker in Report Export
+  const [reportDateRangeType, setReportDateRangeType] = useState<'all' | 'today' | '7days' | '30days' | 'custom'>('all');
+  const [isReportDatePickerOpen, setIsReportDatePickerOpen] = useState(false);
+  const [isReportDropdownOpen, setIsReportDropdownOpen] = useState(false);
+  
+  const today = new Date();
+  const [viewMonth, setViewMonth] = useState(today.getMonth());
+  const [viewYear, setViewYear] = useState(today.getFullYear());
+  const [showMonthYearPicker, setShowMonthYearPicker] = useState(false);
+  const [hoveredDateStr, setHoveredDateStr] = useState<string | null>(null);
+
+  // Click-outside listener
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.report-datepicker-container')) {
+        setIsReportDropdownOpen(false);
+        setIsReportDatePickerOpen(false);
+        setShowMonthYearPicker(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, []);
+
+  const monthNamesAbbrev = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const monthNames = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+  const weekdays = ["M", "T", "W", "T", "F", "S", "S"];
+
+  const getDaysInMonth = (year: number, month: number) => {
+    return new Date(year, month + 1, 0).getDate();
+  };
+
+  const getDayOfWeekOffset = (year: number, month: number) => {
+    const day = new Date(year, month, 1).getDay();
+    return day === 0 ? 6 : day - 1; // Mon=0, Sun=6
+  };
+
+  const formatDatePickerLabel = (dateStr: string) => {
+    if (!dateStr) return '';
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return dateStr;
+    return `${d.getDate()} ${monthNamesAbbrev[d.getMonth()]} ${d.getFullYear()}`;
+  };
+
+  const makeDateStr = (year: number, month: number, day: number) => {
+    const mStr = String(month + 1).padStart(2, '0');
+    const dStr = String(day).padStart(2, '0');
+    return `${year}-${mStr}-${dStr}`;
+  };
+
+  const handleDateClick = (dayStr: string) => {
+    if (!startDate || (startDate && endDate)) {
+      setStartDate(dayStr);
+      setEndDate('');
+    } else {
+      const startTime = new Date(startDate).getTime();
+      const clickedTime = new Date(dayStr).getTime();
+      
+      if (clickedTime < startTime) {
+        setStartDate(dayStr);
+      } else {
+        setEndDate(dayStr);
+        setIsReportDatePickerOpen(false);
+      }
+    }
+  };
+
+  const isSelectedStart = (dayDateStr: string) => {
+    return startDate === dayDateStr;
+  };
+
+  const isSelectedEnd = (dayDateStr: string) => {
+    return endDate === dayDateStr;
+  };
+
+  const isDateBetween = (dayDateStr: string) => {
+    if (!startDate) return false;
+    
+    const dayTime = new Date(dayDateStr).getTime();
+    const startTime = new Date(startDate).getTime();
+    
+    if (endDate) {
+      const endTime = new Date(endDate).getTime();
+      return dayTime > startTime && dayTime < endTime;
+    }
+    
+    if (hoveredDateStr) {
+      const hoverTime = new Date(hoveredDateStr).getTime();
+      if (hoverTime > startTime) {
+        return dayTime > startTime && dayTime < hoverTime;
+      }
+    }
+    
+    return false;
+  };
+
+  const prevMonth = () => {
+    if (viewMonth === 0) {
+      setViewMonth(11);
+      setViewYear(prev => prev - 1);
+    } else {
+      setViewMonth(prev => prev - 1);
+    }
+  };
+
+  const nextMonth = () => {
+    if (viewMonth === 11) {
+      setViewMonth(0);
+      setViewYear(prev => prev + 1);
+    } else {
+      setViewMonth(prev => prev + 1);
+    }
+  };
+
+  const changeReportDateRange = (type: 'all' | 'today' | '7days' | '30days' | 'custom') => {
+    setReportDateRangeType(type);
+    const now = new Date();
+    
+    if (type === 'all') {
+      setStartDate('');
+      setEndDate('');
+    } else if (type === 'today') {
+      const todayStr = makeDateStr(now.getFullYear(), now.getMonth(), now.getDate());
+      setStartDate(todayStr);
+      setEndDate(todayStr);
+    } else if (type === '7days') {
+      const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      const startStr = makeDateStr(sevenDaysAgo.getFullYear(), sevenDaysAgo.getMonth(), sevenDaysAgo.getDate());
+      const endStr = makeDateStr(now.getFullYear(), now.getMonth(), now.getDate());
+      setStartDate(startStr);
+      setEndDate(endStr);
+    } else if (type === '30days') {
+      const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      const startStr = makeDateStr(thirtyDaysAgo.getFullYear(), thirtyDaysAgo.getMonth(), thirtyDaysAgo.getDate());
+      const endStr = makeDateStr(now.getFullYear(), now.getMonth(), now.getDate());
+      setStartDate(startStr);
+      setEndDate(endStr);
+    }
+  };
 
   // Get list of unique locations for filters
   const uniqueLocations = Array.from(
@@ -1526,7 +1669,29 @@ export default function ReportExportCard({ orders }: ReportExportCardProps) {
     return orders.filter(o => {
       const matchesStatus = statusFilter === 'all' || o.status === statusFilter;
       const matchesLocation = locationFilter === 'all' || o.shippingAddress.toLowerCase().includes(locationFilter.toLowerCase());
-      return matchesStatus && matchesLocation;
+      
+      let matchesDate = true;
+      if (startDate || endDate) {
+        const orderDateObj = universalParseDate(o.orderDate);
+        if (orderDateObj) {
+          if (startDate) {
+            const startLimit = new Date(startDate + 'T00:00:00');
+            if (orderDateObj.getTime() < startLimit.getTime()) {
+              matchesDate = false;
+            }
+          }
+          if (endDate) {
+            const endLimit = new Date(endDate + 'T23:59:59.999');
+            if (orderDateObj.getTime() > endLimit.getTime()) {
+              matchesDate = false;
+            }
+          }
+        } else {
+          matchesDate = false;
+        }
+      }
+
+      return matchesStatus && matchesLocation && matchesDate;
     });
   };
 
@@ -1725,7 +1890,7 @@ export default function ReportExportCard({ orders }: ReportExportCardProps) {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
           <div className="space-y-2">
             <label className="text-[10px] font-black uppercase tracking-widest text-black/40 block">
               1. Output File Format
@@ -1827,11 +1992,260 @@ export default function ReportExportCard({ orders }: ReportExportCardProps) {
               ))}
             </select>
           </div>
+
+          <div className="space-y-2 relative report-datepicker-container">
+            <label className="text-[10px] font-black uppercase tracking-widest text-black/40 block">
+              5. Choose Date Range
+            </label>
+            <button
+              type="button"
+              onClick={() => setIsReportDropdownOpen(!isReportDropdownOpen)}
+              className="w-full bg-black/[0.02] hover:bg-black/[0.04] border border-black/10 shadow-sm rounded-2xl py-3 pl-11 pr-10 hover:border-black/20 transition-all text-xs font-sans font-bold text-black outline-none cursor-pointer flex items-center justify-between relative"
+            >
+              <Calendar className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-black/40" />
+              <span className="truncate">
+                {reportDateRangeType === 'all' && 'All Time'}
+                {reportDateRangeType === 'today' && 'Today'}
+                {reportDateRangeType === '7days' && 'Last 7 Days'}
+                {reportDateRangeType === '30days' && 'Last 30 Days'}
+                {reportDateRangeType === 'custom' && (
+                  startDate 
+                    ? `${formatDatePickerLabel(startDate)}${endDate ? ` - ${formatDatePickerLabel(endDate)}` : ' - ...'}`
+                    : 'Custom Range'
+                )}
+              </span>
+              <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-black/40" />
+            </button>
+
+            {isReportDropdownOpen && (
+              <div className="absolute left-0 top-full mt-2 z-50 bg-white border border-black/15 shadow-xl rounded-2xl w-48 py-2 text-black animate-fade-in animate-duration-150">
+                <button
+                  type="button"
+                  onClick={() => {
+                    changeReportDateRange('all');
+                    setIsReportDropdownOpen(false);
+                  }}
+                  className={`w-full px-4 py-2.5 text-left text-xs font-bold hover:bg-black/[0.02] transition-colors ${reportDateRangeType === 'all' ? 'text-black bg-black/[0.03]' : 'text-neutral-700'}`}
+                >
+                  All Time
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    changeReportDateRange('today');
+                    setIsReportDropdownOpen(false);
+                  }}
+                  className={`w-full px-4 py-2.5 text-left text-xs font-bold hover:bg-black/[0.02] transition-colors ${reportDateRangeType === 'today' ? 'text-black bg-black/[0.03]' : 'text-neutral-700'}`}
+                >
+                  Today
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    changeReportDateRange('7days');
+                    setIsReportDropdownOpen(false);
+                  }}
+                  className={`w-full px-4 py-2.5 text-left text-xs font-bold hover:bg-black/[0.02] transition-colors ${reportDateRangeType === '7days' ? 'text-black bg-black/[0.03]' : 'text-neutral-700'}`}
+                >
+                  Last 7 Days
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    changeReportDateRange('30days');
+                    setIsReportDropdownOpen(false);
+                  }}
+                  className={`w-full px-4 py-2.5 text-left text-xs font-bold hover:bg-black/[0.02] transition-colors ${reportDateRangeType === '30days' ? 'text-black bg-black/[0.03]' : 'text-neutral-700'}`}
+                >
+                  Last 30 Days
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setReportDateRangeType('custom');
+                    setIsReportDatePickerOpen(true);
+                    setIsReportDropdownOpen(false);
+                  }}
+                  className={`w-full px-4 py-2.5 text-left text-xs font-bold hover:bg-black/[0.02] transition-colors ${reportDateRangeType === 'custom' ? 'text-black bg-black/[0.03]' : 'text-neutral-700'}`}
+                >
+                  Custom Range...
+                </button>
+              </div>
+            )}
+
+            {reportDateRangeType === 'custom' && isReportDatePickerOpen && (
+              <div className="absolute left-0 top-full mt-2 z-50 bg-white border border-black/10 rounded-2xl p-4 shadow-xl w-[265px] text-black">
+                {showMonthYearPicker ? (
+                  <div className="py-1">
+                    <div className="flex justify-between items-center px-1 mb-3 border-b border-black/5 pb-2">
+                      <button 
+                        type="button"
+                        onClick={() => setViewYear(prev => prev - 1)}
+                        className="text-xs font-bold text-black/50 hover:text-black p-1 bg-black/[0.02] hover:bg-black/5 rounded"
+                      >
+                        &larr;
+                      </button>
+                      <span className="text-xs font-black text-black tracking-wider">{viewYear}</span>
+                      <button 
+                        type="button"
+                        onClick={() => setViewYear(prev => prev + 1)}
+                        className="text-xs font-bold text-black/50 hover:text-black p-1 bg-black/[0.02] hover:bg-black/5 rounded"
+                      >
+                        &rarr;
+                      </button>
+                    </div>
+                    
+                    <div className="grid grid-cols-3 gap-1.5 text-center text-xs font-bold">
+                      {monthNames.map((name, mIdx) => (
+                        <button
+                          key={name}
+                          type="button"
+                          onClick={() => {
+                            setViewMonth(mIdx);
+                            setShowMonthYearPicker(false);
+                          }}
+                          className={`py-2 rounded-xl transition-all ${
+                            viewMonth === mIdx 
+                              ? 'bg-black text-white' 
+                              : 'bg-black/[0.02] text-black hover:bg-black/5'
+                          }`}
+                        >
+                          {name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <div className="flex items-center justify-between mb-4">
+                      <button
+                        type="button"
+                        onClick={() => setShowMonthYearPicker(true)}
+                        className="flex items-center gap-1 text-xs font-black uppercase text-neutral-800 hover:bg-black/5 px-2 py-1 rounded-lg transition-colors cursor-pointer text-left"
+                      >
+                        <span>{monthNames[viewMonth]} {viewYear}</span>
+                        <span className="text-[8px] text-neutral-400">▼</span>
+                      </button>
+
+                      <div className="flex items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={prevMonth}
+                          className="text-neutral-500 hover:text-neutral-800 hover:bg-black/5 p-1 rounded-full text-sm font-bold transition-all w-6 h-6 flex items-center justify-center cursor-pointer"
+                        >
+                          <ChevronLeft className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={nextMonth}
+                          className="text-neutral-500 hover:text-neutral-800 hover:bg-black/5 p-1 rounded-full text-sm font-bold transition-all w-6 h-6 flex items-center justify-center cursor-pointer"
+                        >
+                          <ChevronRight className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-7 gap-y-1 gap-x-1 text-center text-[10px] font-bold text-black/35 tracking-wider mb-1.5">
+                      {weekdays.map((day, i) => (
+                        <div key={i}>{day}</div>
+                      ))}
+                    </div>
+
+                    <div className="border-b border-black/[0.06] mb-2" />
+
+                    <div className="text-[10px] font-black uppercase tracking-widest text-[#94a3b8] mb-1.5 px-0.5 text-left">
+                      {monthNames[viewMonth]}
+                    </div>
+
+                    <div className="grid grid-cols-7 gap-y-1 gap-x-1 justify-items-center text-center">
+                      {(() => {
+                        const year = viewYear;
+                        const month = viewMonth;
+                        const total = getDaysInMonth(year, month);
+                        const startOffset = getDayOfWeekOffset(year, month);
+                        const cells = [];
+                        
+                        for (let b = 0; b < startOffset; b++) {
+                          cells.push(<div key={`blank-${b}`} className="w-8 h-8" />);
+                        }
+                        
+                        for (let d = 1; d <= total; d++) {
+                          const dateStr = makeDateStr(year, month, d);
+                          const isStart = isSelectedStart(dateStr);
+                          const isEnd = isSelectedEnd(dateStr);
+                          const isDateBetweenVal = isDateBetween(dateStr);
+                          
+                          cells.push(
+                            <div key={`day-${d}`} className="relative w-full h-8 flex items-center justify-center">
+                              {isDateBetweenVal && (
+                                <div className="absolute inset-y-1.5 left-0 right-0 bg-[#edf5ff]/80" />
+                              )}
+                              {isStart && (endDate || hoveredDateStr) && (
+                                <div className="absolute inset-y-1.5 left-1/2 right-0 bg-[#edf5ff]/80" />
+                              )}
+                              {isEnd && (
+                                <div className="absolute inset-y-1.5 left-0 right-1/2 bg-[#edf5ff]/80" />
+                              )}
+
+                              <button
+                                type="button"
+                                onClick={() => handleDateClick(dateStr)}
+                                onMouseEnter={() => setHoveredDateStr(dateStr)}
+                                onMouseLeave={() => setHoveredDateStr(null)}
+                                className={`relative z-10 w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all ${
+                                  isStart
+                                    ? 'border border-black bg-white text-black shadow-sm'
+                                    : isEnd
+                                      ? 'bg-[#edf5ff] border border-blue-200 text-[#2c6ec4] shadow-sm'
+                                      : isDateBetweenVal
+                                        ? 'text-[#2c6ec4] bg-transparent hover:bg-blue-100/30'
+                                        : 'text-neutral-700 hover:bg-black/5 font-medium'
+                                }`}
+                              >
+                                {d}
+                              </button>
+                            </div>
+                          );
+                        }
+                        
+                        return cells;
+                      })()}
+                    </div>
+
+                    {/* Reset button at bottom of Custom Range picker */}
+                    <div className="mt-4 pt-3 border-t border-neutral-100 flex items-center justify-between">
+                      <span className="text-[9px] text-[#8B7E6F] font-black uppercase tracking-wider">
+                        {startDate ? 'Range Active' : 'Select Dates'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setStartDate('');
+                          setEndDate('');
+                          setHoveredDateStr(null);
+                          setReportDateRangeType('all');
+                          setIsReportDatePickerOpen(false);
+                        }}
+                        className="bg-neutral-100 hover:bg-neutral-200 text-neutral-800 hover:text-neutral-900 border border-neutral-200/50 text-[10px] font-black uppercase tracking-wider px-3 py-1.5 rounded-lg transition-all cursor-pointer shadow-sm"
+                      >
+                        Reset
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
 
         {filteredCount === 0 && (
           <div className="p-4 bg-amber-50 border border-amber-100 rounded-2xl text-amber-800 text-xs font-bold uppercase tracking-wider text-center">
-            No matching logs exist for: Status={statusFilter.toUpperCase()}, Region={locationFilter.toUpperCase()}. Please adjust selections!
+            No matching logs exist for current filters!
+            {(startDate || endDate) && (
+              <span className="block mt-1 normal-case text-[11px] font-semibold text-amber-700/80">
+                ({startDate || 'Starting point'} to {endDate || 'Ending point'} selection window)
+              </span>
+            )}
           </div>
         )}
 
