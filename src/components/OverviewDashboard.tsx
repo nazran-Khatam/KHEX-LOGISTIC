@@ -6,84 +6,14 @@ import {
 } from 'recharts';
 import { motion } from 'motion/react';
 import { Package, TrendingUp, AlertCircle, Clock, Calendar, ChevronLeft, ChevronRight, List, Truck } from 'lucide-react';
+import { universalParseDate } from '../lib/utils';
+export { universalParseDate };
 
 interface OverviewDashboardProps {
   orders: Order[];
   dateRangeType?: 'all' | 'today' | '7days' | '30days' | 'custom';
   customStartDate?: string;
   customEndDate?: string;
-}
-
-export function universalParseDate(date: any): Date | null {
-  if (!date) return null;
-  // If it's a Firestore Timestamp or object with toDate()
-  if (typeof date.toDate === 'function') {
-    return date.toDate();
-  }
-  // If it has seconds / nanoseconds properties (serialized Firestore Timestamp)
-  if (typeof date === 'object' && 'seconds' in date && typeof date.seconds === 'number') {
-    return new Date(date.seconds * 1000 + Math.floor((date.nanoseconds || 0) / 1000000));
-  }
-  // If it's already a Date
-  if (date instanceof Date) {
-    return isNaN(date.getTime()) ? null : date;
-  }
-  // If it is a number (milliseconds)
-  if (typeof date === 'number') {
-    const d = new Date(date);
-    return isNaN(d.getTime()) ? null : d;
-  }
-  // If it's a string, let's parse it carefully
-  if (typeof date === 'string') {
-    const trimmed = date.trim();
-    if (!trimmed || trimmed === 'N/A' || trimmed === '-') return null;
-
-    // Try parsing as standard ISO or browser-understood string first
-    const nativeDate = new Date(trimmed);
-    if (!isNaN(nativeDate.getTime())) {
-      return nativeDate;
-    }
-
-    // Match DD/MM/YYYY hh:mm:ss with optional AM/PM
-    const dmyRegex = /^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})(?:\s*,\s*|\s+)(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/i;
-    const match = trimmed.match(dmyRegex);
-    if (match) {
-      const day = parseInt(match[1], 10);
-      const month = parseInt(match[2], 10) - 1; // 0-indexed
-      const year = parseInt(match[3], 10);
-      let hour = parseInt(match[4], 10);
-      const minute = parseInt(match[5], 10);
-      const second = match[6] ? parseInt(match[6], 10) : 0;
-      const ampm = match[7];
-
-      if (ampm) {
-        if (ampm.toUpperCase() === 'PM' && hour < 12) hour += 12;
-        if (ampm.toUpperCase() === 'AM' && hour === 12) hour = 0;
-      }
-
-      const parsed = new Date(year, month, day, hour, minute, second);
-      if (!isNaN(parsed.getTime())) {
-        return parsed;
-      }
-    }
-
-    // Try just DD/MM/YYYY without times
-    const dmyOnlyRegex = /^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/;
-    const matchOnly = trimmed.match(dmyOnlyRegex);
-    if (matchOnly) {
-      const day = parseInt(matchOnly[1], 10);
-      const month = parseInt(matchOnly[2], 10) - 1;
-      const year = parseInt(matchOnly[3], 10);
-      const parsed = new Date(year, month, day, 0, 0, 0);
-      if (!isNaN(parsed.getTime())) {
-        return parsed;
-      }
-    }
-  }
-
-  // Fallback
-  const fallback = new Date(date);
-  return isNaN(fallback.getTime()) ? null : fallback;
 }
 
 // Average Delivery Time Calculation Helper Functions

@@ -6,6 +6,8 @@ import { getDeterministicName, getDriverName, getDeliveredBy, getReceiverName, g
 import { universalParseDate } from './OverviewDashboard';
 import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 function isStringFieldChanged(proposed: string, original: string): boolean {
   const cleanStr = (s: string) => {
@@ -1498,7 +1500,7 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
 }
 
 export default function ReportExportCard({ orders }: ReportExportCardProps) {
-  const [reportFormat, setReportFormat] = useState<'csv' | 'json'>('csv');
+  const [reportFormat, setReportFormat] = useState<'csv' | 'json' | 'pdf'>('pdf');
   const [reportDepth, setReportDepth] = useState<'detailed' | 'summary'>('detailed');
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'shipped' | 'delivered'>('all');
   const [locationFilter, setLocationFilter] = useState<string>('all');
@@ -1707,6 +1709,125 @@ export default function ReportExportCard({ orders }: ReportExportCardProps) {
       const jsonStr = JSON.stringify(enrichedOrders, null, 2);
       const blob = new Blob([jsonStr], { type: 'application/json' });
       triggerDownload(blob, `khex-logistics-report-${statusFilter}-${new Date().toISOString().slice(0,10)}.json`);
+    } else if (reportFormat === 'pdf') {
+      // PDF EXPORT
+      try {
+        const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+        
+        // Title
+        doc.setFont("Helvetica", "bold");
+        doc.setFontSize(16);
+        const reportTitle = reportDepth === 'detailed' ? 'DETAILS REPORT' : 'SUMMARY REPORT';
+        doc.text(`KHEX LOGISTICS - ${reportTitle}`, 14, 15);
+        
+        // Subtitle
+        doc.setFont("Helvetica", "normal");
+        doc.setFontSize(9);
+        doc.setTextColor(100);
+        doc.text(`Generated At: ${new Date().toLocaleString()} | Range: ${reportDateRangeType.toUpperCase()}`, 14, 21);
+        doc.text(`Status Filter: ${statusFilter.toUpperCase()} | Location Filter: ${locationFilter.toUpperCase()}`, 14, 25);
+        
+        // Reset color
+        doc.setTextColor(0);
+
+        let headers: string[] = [];
+        let rows: any[][] = [];
+
+        if (reportDepth === 'detailed') {
+          headers = [
+            "ID",
+            "Date Created",
+            "Pickup Time",
+            "Received Time",
+            "Destination",
+            "Status",
+            "Driver",
+            "Product",
+            "Qty",
+            "Serial Numbers"
+          ];
+
+          targetOrders.forEach(o => {
+            const parsedDate = universalParseDate(o.orderDate);
+            const dateStr = parsedDate ? parsedDate.toLocaleString('en-GB') : '-';
+            const pickupStr = getMovementTime(o, 'shipped') || '-';
+            const receivedStr = getMovementTime(o, 'delivered') || '-';
+            
+            const statusLower = (o.status || '').toLowerCase();
+            const dName = (statusLower === 'shipped' || statusLower === 'delivered') ? getDriverName(o) : '-';
+
+            o.items.forEach(item => {
+              const serialsStr = (item.serialNumbers || []).join(", ");
+              rows.push([
+                o.id,
+                dateStr,
+                pickupStr,
+                receivedStr,
+                o.shippingAddress || '-',
+                o.status.toUpperCase(),
+                dName,
+                item.name,
+                item.quantity,
+                serialsStr || '-'
+              ]);
+            });
+          });
+        } else {
+          headers = [
+            "ID",
+            "Date Created",
+            "Pickup Time",
+            "Received Time",
+            "Destination",
+            "Status",
+            "Driver",
+            "Total Units",
+            "Manifest Summary"
+          ];
+
+          targetOrders.forEach(o => {
+            const parsedDate = universalParseDate(o.orderDate);
+            const dateStr = parsedDate ? parsedDate.toLocaleString('en-GB') : '-';
+            const pickupStr = getMovementTime(o, 'shipped') || '-';
+            const receivedStr = getMovementTime(o, 'delivered') || '-';
+            const statusLower = (o.status || '').toLowerCase();
+            const dName = (statusLower === 'shipped' || statusLower === 'delivered') ? getDriverName(o) : '-';
+            const totalUnits = o.items.reduce((sum, i) => sum + i.quantity, 0);
+            const manifestSummary = o.items.map(i => i.name).join("\n");
+
+          rows.push([
+            o.id,
+            dateStr,
+            pickupStr,
+            receivedStr,
+            o.shippingAddress || '-',
+            o.status.toUpperCase(),
+            dName,
+            totalUnits,
+            manifestSummary
+          ]);
+        });
+      }
+
+        autoTable(doc, {
+          startY: 30,
+          head: [headers],
+          body: rows,
+          theme: 'striped',
+          headStyles: { fillColor: [255, 152, 0] }, // Amber theme
+          styles: { fontSize: 8 },
+          columnStyles: {
+            0: { cellWidth: 22 },
+            4: { cellWidth: 35 },
+            9: { cellWidth: 40 },
+          }
+        });
+
+        doc.save(`khex-logistics-${reportDepth}-report-${statusFilter}-${new Date().toISOString().slice(0,10)}.pdf`);
+      } catch (err) {
+        console.error("PDF generation error: ", err);
+        alert("Could not generate PDF: " + (err instanceof Error ? err.message : String(err)));
+      }
     } else {
       let csvContent = "";
 
@@ -1883,70 +2004,32 @@ export default function ReportExportCard({ orders }: ReportExportCardProps) {
             <label className="text-[10px] font-black uppercase tracking-widest text-black/40 block">
               1. Output File Format
             </label>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => setReportFormat('csv')}
-                className={`p-3 rounded-2xl border text-center transition-all flex flex-col items-center justify-center gap-1.5 font-bold text-xs ${
-                  reportFormat === 'csv'
-                    ? 'border-[#FF9800] bg-[#FF9800]/5 text-[#E65100]'
-                    : 'border-black/5 hover:bg-black/[0.02] text-black/60'
-                }`}
-              >
-                <FileSpreadsheet className="w-5 h-5" />
-                <span>CSV Spreadsheet</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setReportFormat('json')}
-                className={`p-3 rounded-2xl border text-center transition-all flex flex-col items-center justify-center gap-1.5 font-bold text-xs ${
-                  reportFormat === 'json'
-                    ? 'border-[#FF9800] bg-[#FF9800]/5 text-[#E65100]'
-                    : 'border-black/5 hover:bg-black/[0.02] text-black/60'
-                }`}
-              >
-                <FileJson className="w-5 h-5" />
-                <span>JSON Backup</span>
-              </button>
-            </div>
+            <select
+              value={reportFormat}
+              onChange={(e: any) => setReportFormat(e.target.value)}
+              className="w-full bg-black/[0.02] border border-black/10 rounded-2xl py-3 px-4 font-bold text-xs text-black outline-none focus:border-[#FF9800] cursor-pointer"
+            >
+              <option value="pdf">PDF Document</option>
+              <option value="csv">CSV Spreadsheet</option>
+              <option value="json">JSON Backup</option>
+            </select>
           </div>
 
           <div className="space-y-2">
             <label className="text-[10px] font-black uppercase tracking-widest text-black/40 block">
               2. Structural Layout
             </label>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                disabled={reportFormat !== 'csv'}
-                onClick={() => setReportDepth('detailed')}
-                className={`p-3 rounded-2xl border text-center transition-all flex flex-col items-center justify-center gap-1.5 font-bold text-xs ${
-                  reportFormat !== 'csv' ? 'opacity-40 cursor-not-allowed' : ''
-                } ${
-                  reportDepth === 'detailed' && reportFormat === 'csv'
-                    ? 'border-black bg-black text-white'
-                    : 'border-black/5 hover:bg-black/[0.02] text-black/60'
-                }`}
-              >
-                <span className="text-sm font-black font-mono">1:N</span>
-                <span className="text-[10px] leading-tight">Detailed Items</span>
-              </button>
-              <button
-                type="button"
-                disabled={reportFormat !== 'csv'}
-                onClick={() => setReportDepth('summary')}
-                className={`p-3 rounded-2xl border text-center transition-all flex flex-col items-center justify-center gap-1.5 font-bold text-xs ${
-                  reportFormat !== 'csv' ? 'opacity-40 cursor-not-allowed' : ''
-                } ${
-                  reportDepth === 'summary' && reportFormat === 'csv'
-                    ? 'border-black bg-black text-white'
-                    : 'border-black/5 hover:bg-black/[0.02] text-black/60'
-                }`}
-              >
-                <span className="text-sm font-black font-mono">1:1</span>
-                <span className="text-[10px] leading-tight">Order Summary</span>
-              </button>
-            </div>
+            <select
+              disabled={reportFormat === 'json'}
+              value={reportFormat === 'json' ? 'detailed' : reportDepth}
+              onChange={(e: any) => setReportDepth(e.target.value)}
+              className={`w-full bg-black/[0.02] border border-black/10 rounded-2xl py-3 px-4 font-bold text-xs text-black outline-none focus:border-[#FF9800] cursor-pointer ${
+                reportFormat === 'json' ? 'opacity-40 cursor-not-allowed' : ''
+              }`}
+            >
+              <option value="detailed">Details Report</option>
+              <option value="summary">Summary Report</option>
+            </select>
           </div>
 
           <div className="space-y-2">

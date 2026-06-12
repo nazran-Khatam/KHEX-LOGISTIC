@@ -7,9 +7,9 @@ import { LayoutDashboard, Package, Truck, CheckCircle2, LogOut, Search, MapPin, 
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 import OrderCard from './OrderCard';
-import OrderDetails from './OrderDetails';
+import OrderDetails, { getPickupDate, getDeliveryDate } from './OrderDetails';
 import Logo from './Logo';
-import OverviewDashboard from './OverviewDashboard';
+import OverviewDashboard, { universalParseDate } from './OverviewDashboard';
 import CreateOrder from './CreateOrder';
 import EditOrderModal from './EditOrderModal';
 import ReportExportCard from './ReportExportCard';
@@ -163,60 +163,24 @@ export default function Dashboard({ orders, user, onLogout }: DashboardProps) {
 
   const getOrderTimestamp = (order: Order): Date => {
     const safeGetDate = (date: any): Date | null => {
-      if (!date) return null;
-      if (typeof date.toDate === 'function') return date.toDate();
-      const d = new Date(date);
-      return isNaN(d.getTime()) ? null : d;
+      return universalParseDate(date);
     };
 
-    if (order.status === 'delivered') {
-      if (order.movement && order.movement.length > 0) {
-        const deliveredStep = order.movement.find(m => {
-          const statusLower = (m.status || '').toLowerCase();
-          return statusLower.includes('deliver') || statusLower.includes('received');
-        });
-        if (deliveredStep && deliveredStep.timestamp) {
-          const d = safeGetDate(deliveredStep.timestamp);
-          if (d) return d;
-        }
-      }
-
-      if (order.shippedItems && Object.keys(order.shippedItems).length > 0) {
-        const firstItem = Object.values(order.shippedItems)[0];
-        if (firstItem && firstItem.firstSeen) {
-          if (typeof firstItem.firstSeen === 'string') {
-            const timeMatch = firstItem.firstSeen.match(/(\d+):(\d+):(\d+)\s*(AM|PM)/i);
-            if (timeMatch) {
-              const updatedAt = safeGetDate(order.updatedAt) || new Date();
-              const d = new Date(updatedAt);
-              let h = parseInt(timeMatch[1]);
-              const m = parseInt(timeMatch[2]);
-              const s = parseInt(timeMatch[3]);
-              const period = timeMatch[4].toUpperCase();
-              
-              if (period === 'PM' && h < 12) h += 12;
-              if (period === 'AM' && h === 12) h = 0;
-              
-              d.setHours(h, m, s, 0);
-              return d;
-            }
-          } else {
-            const d = safeGetDate(firstItem.firstSeen);
-            if (d) return d;
-          }
-        }
-      }
-
-      if (order.updatedAt) {
-        const d = safeGetDate(order.updatedAt);
-        if (d) return d;
-      }
+    const statusMatch = (order.status || 'pending').toLowerCase();
+    if (statusMatch === 'pending') {
+      const d = safeGetDate(order.orderDate);
+      if (d) return d;
+    } else if (statusMatch === 'shipped') {
+      const d = getPickupDate(order);
+      if (d) return d;
+    } else if (statusMatch === 'delivered') {
+      const d = getDeliveryDate(order);
+      if (d) return d;
     }
 
-    const d = safeGetDate(order.orderDate);
-    if (d) return d;
-
-    return new Date();
+    // Fallback
+    const fallback = safeGetDate(order.orderDate) || safeGetDate(order.updatedAt) || new Date();
+    return fallback;
   };
 
   const getFilteredByDateOrders = (): Order[] => {

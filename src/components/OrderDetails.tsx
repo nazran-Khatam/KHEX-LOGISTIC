@@ -196,9 +196,16 @@ export default function OrderDetails({ order, isOpen, onClose }: OrderDetailsPro
   };
 
   const orderDate = safeGetDate(order?.orderDate);
-
+  const pickupDate = getPickupDate(order);
   const deliveryDate = getDeliveryDate(order);
-  const displayDate = deliveryDate && !isNaN(deliveryDate.getTime()) ? deliveryDate : orderDate;
+
+  const statusLower = (order?.status || 'pending').toLowerCase();
+  let displayDate = orderDate;
+  if (statusLower === 'shipped') {
+    displayDate = pickupDate && !isNaN(pickupDate.getTime()) ? pickupDate : orderDate;
+  } else if (statusLower === 'delivered') {
+    displayDate = deliveryDate && !isNaN(deliveryDate.getTime()) ? deliveryDate : orderDate;
+  }
 
   const getSerialNumbers = (itemName: string): string[] => {
     if (!order) return [];
@@ -401,7 +408,11 @@ export default function OrderDetails({ order, isOpen, onClose }: OrderDetailsPro
                   <div className="relative z-10">
                     <Clock className="w-4 h-4 text-black mb-4" />
                     <p className="text-[9px] uppercase tracking-[0.2em] text-black/30 font-bold mb-1">
-                      {order.status === 'delivered' ? 'Delivery Timestamp' : 'Created At'}
+                      {statusLower === 'delivered' 
+                        ? 'Delivery Timestamp' 
+                        : statusLower === 'shipped' 
+                          ? 'Pickup Timestamp' 
+                          : 'Created At'}
                     </p>
                     <p className="text-xs font-bold uppercase text-black/60 leading-relaxed">
                       {format(displayDate, 'MMM d, yyyy • HH:mm')}
