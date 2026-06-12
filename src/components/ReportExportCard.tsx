@@ -1714,10 +1714,43 @@ export default function ReportExportCard({ orders }: ReportExportCardProps) {
       try {
         const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
         
+        // Draw KHEX LOGISTIC Logo in Top Right Corner
+        doc.setFont("Helvetica", "bold");
+        doc.setFontSize(28);
+        const khWidth = doc.getTextWidth("KH");
+        const exWidth = doc.getTextWidth("EX");
+        const khexWidth = khWidth + exWidth;
+        const startX = 283 - khexWidth; // Align to right margin (283mm)
+        
+        // Render KH
+        doc.setTextColor(0, 0, 0);
+        doc.text("KH", startX, 16);
+        
+        // Render EX
+        doc.setTextColor(255, 152, 0); // #FF9800
+        doc.text("EX", startX + khWidth, 16);
+        
+        // Render LOGISTIC Subtext & Line
+        doc.setFontSize(7);
+        doc.setTextColor(0, 0, 0);
+        const subText = "L O G I S T I C";
+        const subWidth = doc.getTextWidth(subText);
+        const centerX = startX + (khexWidth / 2);
+        const subStartX = centerX - (subWidth / 2);
+        
+        doc.text(subText, subStartX, 21.5);
+        
+        // Draw the horizontal lines matching Logo.tsx
+        doc.setLineWidth(0.3);
+        doc.setDrawColor(0, 0, 0);
+        doc.line(startX, 20.0, subStartX - 1.2, 20.0);
+        doc.line(subStartX + subWidth + 1.2, 20.0, 283, 20.0);
+
         // Title
         doc.setFont("Helvetica", "bold");
         doc.setFontSize(16);
         const reportTitle = reportDepth === 'detailed' ? 'DETAILS REPORT' : 'SUMMARY REPORT';
+        doc.setTextColor(0, 0, 0);
         doc.text(`KHEX LOGISTICS - ${reportTitle}`, 14, 15);
         
         // Subtitle
