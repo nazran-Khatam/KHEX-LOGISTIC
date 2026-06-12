@@ -150,6 +150,88 @@ function getResolvedMovement(order: Order): any[] {
   });
 }
 
+// Extract pickup date of an order
+function getPickupDate(order: Order | undefined): Date | null {
+  if (!order) return null;
+  if (order.pickedAt && (typeof order.pickedAt !== 'string' || order.pickedAt.trim() !== '')) {
+    const d = universalParseDate(order.pickedAt);
+    if (d && !isNaN(d.getTime())) return d;
+  }
+  
+  if (order.movement && order.movement.length > 0) {
+    const shippedStep = order.movement.find(m => {
+      const statusLower = (m.status || '').toLowerCase();
+      return statusLower.includes('ship') || statusLower.includes('transit') || statusLower.includes('pick');
+    });
+    if (shippedStep && shippedStep.timestamp) {
+      const d = universalParseDate(shippedStep.timestamp);
+      if (d && !isNaN(d.getTime())) return d;
+    }
+  }
+
+  if (order.status === 'shipped' || order.status === 'delivered') {
+    const createdTime = universalParseDate(order.orderDate) || new Date();
+    return new Date(createdTime.getTime() + 1.5 * 3600 * 1000);
+  }
+  
+  return null;
+}
+
+// Extract delivery date of an order
+function getDeliveryDate(order: Order | undefined): Date | null {
+  if (!order) return null;
+  if (order.deliveredAt && (typeof order.deliveredAt !== 'string' || order.deliveredAt.trim() !== '')) {
+    const d = universalParseDate(order.deliveredAt);
+    if (d && !isNaN(d.getTime())) return d;
+  }
+
+  // Check movement history first for direct "Delivered" step
+  if (order.movement && order.movement.length > 0) {
+    const deliveredStep = order.movement.find(m => {
+      const statusLower = (m.status || '').toLowerCase();
+      return statusLower.includes('deliver') || statusLower.includes('received');
+    });
+    if (deliveredStep && deliveredStep.timestamp) {
+      const d = universalParseDate(deliveredStep.timestamp);
+      if (d && !isNaN(d.getTime())) return d;
+    }
+  }
+  
+  // Check shippedItems for more precise delivery time
+  if (order.shippedItems && Object.keys(order.shippedItems).length > 0) {
+    const firstItem = Object.values(order.shippedItems)[0];
+    if (firstItem && firstItem.firstSeen) {
+      if (typeof firstItem.firstSeen === 'string') {
+        // Parse "03:38:10 PM" format
+        const timeMatch = firstItem.firstSeen.match(/(\d+):(\d+):(\d+)\s*(AM|PM)/i);
+        if (timeMatch) {
+          const updatedAt = universalParseDate(order.updatedAt) || new Date();
+          const d = new Date(updatedAt);
+          let h = parseInt(timeMatch[1]);
+          const m = parseInt(timeMatch[2]);
+          const s = parseInt(timeMatch[3]);
+          const period = timeMatch[4].toUpperCase();
+          
+          if (period === 'PM' && h < 12) h += 12;
+          if (period === 'AM' && h === 12) h = 0;
+          
+          d.setHours(h, m, s, 0);
+          return d;
+        }
+      } else if (typeof firstItem.firstSeen === 'object') {
+        const d = universalParseDate(firstItem.firstSeen);
+        if (d && !isNaN(d.getTime())) return d;
+      }
+    }
+  }
+  
+  if (order.status === 'delivered') {
+    return universalParseDate(order.updatedAt) || new Date();
+  }
+  
+  return null;
+}
+
 // Format duration helper function representing days in days, hours or minutes
 function formatDuration(days: number): string {
   if (days <= 0) return '0d';
@@ -306,37 +388,17 @@ export default function OverviewDashboard({
   );
 
   // Average Delivery Time Calculation (Pickup Time to Received Time)
-  const getDate = (date: any) => {
-    return universalParseDate(date);
-  };
-
   let totalDays = 0;
   let validCount = 0;
 
   displayOrders.forEach(order => {
-    const resolvedMovement = getResolvedMovement(order);
-    
-    // Find Pickup step
-    const pickupStep = resolvedMovement.find(m => {
-      const statusLower = (m.status || '').toLowerCase();
-      return statusLower.includes('ship') || statusLower.includes('transit') || statusLower.includes('pick');
-    });
+    const pickupDate = getPickupDate(order);
+    const receivedDate = getDeliveryDate(order);
 
-    // Find Received step
-    const receivedStep = resolvedMovement.find(m => {
-      const statusLower = (m.status || '').toLowerCase();
-      return statusLower.includes('deliver') || statusLower.includes('received');
-    });
-
-    if (pickupStep && receivedStep) {
-      const pickupDate = getDate(pickupStep.timestamp);
-      const receivedDate = getDate(receivedStep.timestamp);
-
-      if (pickupDate && receivedDate) {
-        const diff = Math.max(0, receivedDate.getTime() - pickupDate.getTime());
-        totalDays += diff / (1000 * 60 * 60 * 24);
-        validCount++;
-      }
+    if (pickupDate && receivedDate) {
+      const diff = Math.max(0, receivedDate.getTime() - pickupDate.getTime());
+      totalDays += diff / (1000 * 60 * 60 * 24);
+      validCount++;
     }
   });
 
@@ -357,24 +419,12 @@ export default function OverviewDashboard({
       acc[loc].delivered += 1;
 
       // Extract delivery transit duration
-      const resolvedMovement = getResolvedMovement(order);
-      const pickupStep = resolvedMovement.find(m => {
-        const s = (m.status || '').toLowerCase();
-        return s.includes('ship') || s.includes('transit') || s.includes('pick');
-      });
-      const receivedStep = resolvedMovement.find(m => {
-        const s = (m.status || '').toLowerCase();
-        return s.includes('deliver') || s.includes('received');
-      });
-
-      if (pickupStep && receivedStep) {
-        const pickupDate = getDate(pickupStep.timestamp);
-        const receivedDate = getDate(receivedStep.timestamp);
-        if (pickupDate && receivedDate) {
-          const diff = Math.max(0, receivedDate.getTime() - pickupDate.getTime());
-          const diffDays = diff / (1000 * 60 * 60 * 24);
-          acc[loc].times.push(diffDays);
-        }
+      const pickupDate = getPickupDate(order);
+      const receivedDate = getDeliveryDate(order);
+      if (pickupDate && receivedDate) {
+        const diff = Math.max(0, receivedDate.getTime() - pickupDate.getTime());
+        const diffDays = diff / (1000 * 60 * 60 * 24);
+        acc[loc].times.push(diffDays);
       }
     }
     return acc;
