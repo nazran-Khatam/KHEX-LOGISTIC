@@ -31,4 +31,8 @@ export interface Order {
   driverName?: string;
   deliveredBy?: string;
   receivingName?: string;
+  shippedBy?: string;
+  receivedBy?: string;
+  pickedAt?: any; // Firestore Timestamp / Any
+  deliveredAt?: any; // Firestore Timestamp / Any
 }

@@ -70,6 +70,122 @@ export function getDeterministicName(seed: string, type: 'driver' | 'receiver', 
   }
 }
 
+export function getDriverName(order: Order): string {
+  if (order.shippedBy && typeof order.shippedBy === 'string' && order.shippedBy.trim() !== '') {
+    const clean = order.shippedBy.trim();
+    return clean.includes('@') ? clean.split('@')[0] : clean;
+  }
+  if (order.driverName && typeof order.driverName === 'string' && order.driverName.trim() !== '') {
+    return order.driverName.trim();
+  }
+  return getDeterministicName(order.id, 'driver', order);
+}
+
+export function getDeliveredBy(order: Order): string {
+  if (order.shippedBy && typeof order.shippedBy === 'string' && order.shippedBy.trim() !== '') {
+    const clean = order.shippedBy.trim();
+    return clean.includes('@') ? clean.split('@')[0] : clean;
+  }
+  if (order.deliveredBy && typeof order.deliveredBy === 'string' && order.deliveredBy.trim() !== '') {
+    return order.deliveredBy.trim();
+  }
+  if (order.driverName && typeof order.driverName === 'string' && order.driverName.trim() !== '') {
+    return order.driverName.trim();
+  }
+  return getDeterministicName(order.id, 'driver', order);
+}
+
+export function getReceiverName(order: Order): string {
+  if (order.receivedBy && typeof order.receivedBy === 'string' && order.receivedBy.trim() !== '') {
+    return order.receivedBy.trim();
+  }
+  if (order.receivingName && typeof order.receivingName === 'string' && order.receivingName.trim() !== '') {
+    return order.receivingName.trim();
+  }
+  return getDeterministicName(order.id, 'receiver', order);
+}
+
+export function getPickupDate(order: Order | undefined): Date | null {
+  if (!order) return null;
+  if (order.pickedAt && (typeof order.pickedAt !== 'string' || order.pickedAt.trim() !== '')) {
+    const d = universalParseDate(order.pickedAt);
+    if (d && !isNaN(d.getTime())) return d;
+  }
+  
+  if (order.movement && order.movement.length > 0) {
+    const shippedStep = order.movement.find(m => {
+      const statusLower = (m.status || '').toLowerCase();
+      return statusLower.includes('ship') || statusLower.includes('transit') || statusLower.includes('pick');
+    });
+    if (shippedStep && shippedStep.timestamp) {
+      const d = universalParseDate(shippedStep.timestamp);
+      if (d && !isNaN(d.getTime())) return d;
+    }
+  }
+
+  if (order.status === 'shipped' || order.status === 'delivered') {
+    const createdTime = universalParseDate(order.orderDate) || new Date();
+    return new Date(createdTime.getTime() + 1.5 * 3600 * 1000);
+  }
+  
+  return null;
+}
+
+export function getDeliveryDate(order: Order | undefined): Date | null {
+  if (!order) return null;
+  if (order.deliveredAt && (typeof order.deliveredAt !== 'string' || order.deliveredAt.trim() !== '')) {
+    const d = universalParseDate(order.deliveredAt);
+    if (d && !isNaN(d.getTime())) return d;
+  }
+
+  // Check movement history first for direct "Delivered" step
+  if (order.movement && order.movement.length > 0) {
+    const deliveredStep = order.movement.find(m => {
+      const statusLower = (m.status || '').toLowerCase();
+      return statusLower.includes('deliver') || statusLower.includes('received');
+    });
+    if (deliveredStep && deliveredStep.timestamp) {
+      const d = universalParseDate(deliveredStep.timestamp);
+      if (d && !isNaN(d.getTime())) return d;
+    }
+  }
+  
+  // Check shippedItems for more precise delivery time
+  if (order.shippedItems && Object.keys(order.shippedItems).length > 0) {
+    const firstItem = Object.values(order.shippedItems)[0];
+    if (firstItem && firstItem.firstSeen) {
+      if (typeof firstItem.firstSeen === 'string') {
+        // Parse "03:38:10 PM" format
+        const timeMatch = firstItem.firstSeen.match(/(\d+):(\d+):(\d+)\s*(AM|PM)/i);
+        if (timeMatch) {
+          const updatedAt = universalParseDate(order.updatedAt) || new Date();
+          const d = new Date(updatedAt);
+          let h = parseInt(timeMatch[1]);
+          const m = parseInt(timeMatch[2]);
+          const s = parseInt(timeMatch[3]);
+          const period = timeMatch[4].toUpperCase();
+          
+          if (period === 'PM' && h < 12) h += 12;
+          if (period === 'AM' && h === 12) h = 0;
+          
+          d.setHours(h, m, s, 0);
+          return d;
+        }
+      } else if (typeof firstItem.firstSeen === 'object') {
+        const d = universalParseDate(firstItem.firstSeen);
+        if (d && !isNaN(d.getTime())) return d;
+      }
+    }
+  }
+  
+  if (order.status === 'delivered') {
+    const d = universalParseDate(order.updatedAt);
+    if (d && !isNaN(d.getTime())) return d;
+  }
+  
+  return null;
+}
+
 export default function OrderDetails({ order, isOpen, onClose }: OrderDetailsProps) {
   const [expandedItems, setExpandedItems] = useState<Record<string, boolean>>({});
 
@@ -81,55 +197,7 @@ export default function OrderDetails({ order, isOpen, onClose }: OrderDetailsPro
 
   const orderDate = safeGetDate(order?.orderDate);
 
-  const getDeliveryDate = () => {
-    if (!order) return null;
-    
-    // Check movement history first for direct "Delivered" step
-    if (order.movement && order.movement.length > 0) {
-      const deliveredStep = order.movement.find(m => {
-        const statusLower = (m.status || '').toLowerCase();
-        return statusLower.includes('deliver') || statusLower.includes('received');
-      });
-      if (deliveredStep && deliveredStep.timestamp) {
-        return safeGetDate(deliveredStep.timestamp);
-      }
-    }
-    
-    // Check shippedItems for more precise delivery time
-    if (order.shippedItems && Object.keys(order.shippedItems).length > 0) {
-      const firstItem = Object.values(order.shippedItems)[0];
-      if (firstItem && firstItem.firstSeen) {
-        if (typeof firstItem.firstSeen === 'string') {
-          // Parse "03:38:10 PM" format
-          const timeMatch = firstItem.firstSeen.match(/(\d+):(\d+):(\d+)\s*(AM|PM)/i);
-          if (timeMatch) {
-            const updatedAt = safeGetDate(order.updatedAt);
-            const d = new Date(updatedAt);
-            let h = parseInt(timeMatch[1]);
-            const m = parseInt(timeMatch[2]);
-            const s = parseInt(timeMatch[3]);
-            const period = timeMatch[4].toUpperCase();
-            
-            if (period === 'PM' && h < 12) h += 12;
-            if (period === 'AM' && h === 12) h = 0;
-            
-            d.setHours(h, m, s, 0);
-            return d;
-          }
-        } else if (typeof firstItem.firstSeen === 'object') {
-          return safeGetDate(firstItem.firstSeen);
-        }
-      }
-    }
-    
-    if (order.status === 'delivered') {
-      return safeGetDate(order.updatedAt);
-    }
-    
-    return null;
-  };
-
-  const deliveryDate = getDeliveryDate();
+  const deliveryDate = getDeliveryDate(order);
   const displayDate = deliveryDate && !isNaN(deliveryDate.getTime()) ? deliveryDate : orderDate;
 
   const getSerialNumbers = (itemName: string): string[] => {
@@ -450,9 +518,18 @@ export default function OrderDetails({ order, isOpen, onClose }: OrderDetailsPro
                     const isShipped = statusLower.includes('ship') || statusLower.includes('transit') || statusLower.includes('pick');
                     const isDelivered = statusLower.includes('deliver');
                     
-                    const driverName = order.driverName || getDeterministicName(order.id, 'driver', order);
-                    const deliveredByVal = order.deliveredBy || order.driverName || getDeterministicName(order.id, 'driver', order);
-                    const receiverName = order.receivingName || getDeterministicName(order.id, 'receiver', order);
+                    const driverName = getDriverName(order);
+                    const deliveredByVal = getDeliveredBy(order);
+                    const receiverName = getReceiverName(order);
+                    const pickupTimeDate = getPickupDate(order) || stepDate;
+                    const receivedTimeDate = getDeliveryDate(order) || stepDate;
+
+                    let headerDate = stepDate;
+                    if (isShipped) {
+                      headerDate = pickupTimeDate;
+                    } else if (isDelivered) {
+                      headerDate = receivedTimeDate;
+                    }
 
                     let stepColor = 'text-zinc-500';
                     let stepBg = 'bg-zinc-500';
@@ -496,7 +573,7 @@ export default function OrderDetails({ order, isOpen, onClose }: OrderDetailsPro
                               {step.status}
                             </h5>
                             <p className="text-[10px] font-mono text-black/35 font-bold uppercase">
-                              {format(stepDate, 'dd/MM/yyyy • HH:mm')}
+                              {format(headerDate, 'dd/MM/yyyy • HH:mm')}
                             </p>
                           </div>
                           
@@ -522,7 +599,7 @@ export default function OrderDetails({ order, isOpen, onClose }: OrderDetailsPro
                             <div className="mb-3 bg-blue-50/30 border border-blue-100/50 rounded-xl p-3 space-y-1.5 animate-fadeIn">
                               <div className="flex justify-between text-[11px] items-center">
                                 <span className="text-[#3b82f6] uppercase font-black tracking-wider">Driver Name</span>
-                                <span className="font-extrabold text-blue-900">{driverName}</span>
+                                <span className="font-extrabold text-blue-900 uppercase">{driverName}</span>
                               </div>
                               <div className="flex justify-between text-[11px] items-center">
                                 <span className="text-[#3b82f6] uppercase font-black tracking-wider">Pickup Action</span>
@@ -530,7 +607,7 @@ export default function OrderDetails({ order, isOpen, onClose }: OrderDetailsPro
                               </div>
                               <div className="flex justify-between text-[11px] items-center">
                                 <span className="text-[#3b82f6] uppercase font-black tracking-wider">Pickup Time</span>
-                                <span className="font-mono text-blue-900 font-bold">{format(stepDate, 'HH:mm • dd/MM/yyyy')}</span>
+                                <span className="font-mono text-blue-900 font-bold">{format(pickupTimeDate, 'HH:mm • dd/MM/yyyy')}</span>
                               </div>
                             </div>
                           )}
@@ -539,15 +616,15 @@ export default function OrderDetails({ order, isOpen, onClose }: OrderDetailsPro
                             <div className="mb-3 bg-emerald-50/30 border border-emerald-100/50 rounded-xl p-3 space-y-1.5 animate-fadeIn">
                               <div className="flex justify-between text-[11px] items-center">
                                 <span className="text-[#10b981] uppercase font-black tracking-wider">Delivered By (Driver)</span>
-                                <span className="font-extrabold text-emerald-900">{deliveredByVal}</span>
+                                <span className="font-extrabold text-emerald-900 uppercase">{deliveredByVal}</span>
                               </div>
                               <div className="flex justify-between text-[11px] items-center">
                                 <span className="text-[#10b981] uppercase font-black tracking-wider">Receiver Name</span>
-                                <span className="font-bold text-emerald-950">{receiverName}</span>
+                                <span className="font-bold text-emerald-950 uppercase">{receiverName}</span>
                               </div>
                               <div className="flex justify-between text-[11px] items-center">
                                 <span className="text-[#10b981] uppercase font-black tracking-wider">Received Time</span>
-                                <span className="font-mono text-emerald-900 font-bold">{format(stepDate, 'HH:mm • dd/MM/yyyy')}</span>
+                                <span className="font-mono text-emerald-900 font-bold">{format(receivedTimeDate, 'HH:mm • dd/MM/yyyy')}</span>
                               </div>
                             </div>
                           )}

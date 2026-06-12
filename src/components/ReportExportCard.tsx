@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Order } from '../types';
 import { Download, FileSpreadsheet, FileJson, SlidersHorizontal, CheckCircle, Info, Upload, FileUp, RefreshCw, AlertTriangle, Trash2, Loader2, Check, Calendar, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
 import { motion } from 'motion/react';
-import { getDeterministicName } from './OrderDetails';
+import { getDeterministicName, getDriverName, getDeliveredBy, getReceiverName, getPickupDate, getDeliveryDate } from './OrderDetails';
 import { universalParseDate } from './OverviewDashboard';
 import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -305,27 +305,15 @@ function isTimeFieldChanged(proposedStr: string, originalDate: Date | null): boo
 function getMovementTime(order: Order, targetStatus: 'shipped' | 'delivered'): string {
   if (!order) return 'N/A';
   
-  const resolvedMovement = getResolvedMovement(order);
-  
-  const safeGetDate = (date: any): Date => {
-    return universalParseDate(date) || new Date();
-  };
-
   if (targetStatus === 'shipped') {
-    const step = resolvedMovement.find(m => {
-      const statusLower = (m.status || '').toLowerCase();
-      return statusLower.includes('ship') || statusLower.includes('transit') || statusLower.includes('pick');
-    });
-    if (step && step.timestamp) {
-      return safeGetDate(step.timestamp).toLocaleString('en-GB');
+    const d = getPickupDate(order);
+    if (d && !isNaN(d.getTime())) {
+      return d.toLocaleString('en-GB');
     }
   } else if (targetStatus === 'delivered') {
-    const step = resolvedMovement.find(m => {
-      const statusLower = (m.status || '').toLowerCase();
-      return statusLower.includes('deliver') || statusLower.includes('received');
-    });
-    if (step && step.timestamp) {
-      return safeGetDate(step.timestamp).toLocaleString('en-GB');
+    const d = getDeliveryDate(order);
+    if (d && !isNaN(d.getTime())) {
+      return d.toLocaleString('en-GB');
     }
   }
   
@@ -503,9 +491,9 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
         const receivedStr = getMovementTime(o, 'delivered');
         
         const statusLower = (o.status || '').toLowerCase();
-        const dName = o.driverName || ((statusLower === 'shipped' || statusLower === 'delivered') ? getDeterministicName(o.id, 'driver', o) : '');
-        const delBy = o.deliveredBy || (statusLower === 'delivered' ? (o.driverName || getDeterministicName(o.id, 'driver', o)) : '');
-        const recName = o.receivingName || (statusLower === 'delivered' ? getDeterministicName(o.id, 'receiver', o) : '');
+        const dName = (statusLower === 'shipped' || statusLower === 'delivered') ? getDriverName(o) : '';
+        const delBy = statusLower === 'delivered' ? getDeliveredBy(o) : '';
+        const recName = statusLower === 'delivered' ? getReceiverName(o) : '';
 
         o.items.forEach(item => {
           const row = [
@@ -566,9 +554,9 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
         const serialsDump = o.items.flatMap(i => i.serialNumbers || []).join("; ");
 
         const statusLower = (o.status || '').toLowerCase();
-        const dName = o.driverName || ((statusLower === 'shipped' || statusLower === 'delivered') ? getDeterministicName(o.id, 'driver', o) : '');
-        const delBy = o.deliveredBy || (statusLower === 'delivered' ? (o.driverName || getDeterministicName(o.id, 'driver', o)) : '');
-        const recName = o.receivingName || (statusLower === 'delivered' ? getDeterministicName(o.id, 'receiver', o) : '');
+        const dName = (statusLower === 'shipped' || statusLower === 'delivered') ? getDriverName(o) : '';
+        const delBy = statusLower === 'delivered' ? getDeliveredBy(o) : '';
+        const recName = statusLower === 'delivered' ? getReceiverName(o) : '';
 
         const row = [
           o.id,
@@ -732,9 +720,9 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
         const originalTracking = matched ? (matched.trackingNumber || '') : '';
 
         const matchedStatusLower = matched ? (matched.status || 'pending').toLowerCase() : '';
-        const originalDriver = matched ? (matched.driverName || ((matchedStatusLower === 'shipped' || matchedStatusLower === 'delivered') ? getDeterministicName(matched.id, 'driver', matched) : '')) : '';
-        const originalDeliveredBy = matched ? (matched.deliveredBy || (matchedStatusLower === 'delivered' ? (matched.driverName || getDeterministicName(matched.id, 'driver', matched)) : '')) : '';
-        const originalReceiver = matched ? (matched.receivingName || (matchedStatusLower === 'delivered' ? getDeterministicName(matched.id, 'receiver', matched) : '')) : '';
+        const originalDriver = matched ? ((matchedStatusLower === 'shipped' || matchedStatusLower === 'delivered') ? getDriverName(matched) : '') : '';
+        const originalDeliveredBy = matched ? (matchedStatusLower === 'delivered' ? getDeliveredBy(matched) : '') : '';
+        const originalReceiver = matched ? (matchedStatusLower === 'delivered' ? getReceiverName(matched) : '') : '';
 
         const originalRemark = matched ? (matched.remark || '') : '';
         const originalPickupTime = matched ? getMovementTime(matched, 'shipped') : 'N/A';
@@ -1706,9 +1694,9 @@ export default function ReportExportCard({ orders }: ReportExportCardProps) {
     if (reportFormat === 'json') {
       const enrichedOrders = targetOrders.map(o => {
         const statusLower = (o.status || '').toLowerCase();
-        const dName = o.driverName || ((statusLower === 'shipped' || statusLower === 'delivered') ? getDeterministicName(o.id, 'driver', o) : '');
-        const delBy = o.deliveredBy || (statusLower === 'delivered' ? (o.driverName || getDeterministicName(o.id, 'driver', o)) : '');
-        const recName = o.receivingName || (statusLower === 'delivered' ? getDeterministicName(o.id, 'receiver', o) : '');
+        const dName = (statusLower === 'shipped' || statusLower === 'delivered') ? getDriverName(o) : '';
+        const delBy = statusLower === 'delivered' ? getDeliveredBy(o) : '';
+        const recName = statusLower === 'delivered' ? getReceiverName(o) : '';
         return {
           ...o,
           driverName: dName,
@@ -1753,9 +1741,9 @@ export default function ReportExportCard({ orders }: ReportExportCardProps) {
           const receivedStr = getMovementTime(o, 'delivered');
           
           const statusLower = (o.status || '').toLowerCase();
-          const dName = o.driverName || ((statusLower === 'shipped' || statusLower === 'delivered') ? getDeterministicName(o.id, 'driver', o) : '');
-          const delBy = o.deliveredBy || (statusLower === 'delivered' ? (o.driverName || getDeterministicName(o.id, 'driver', o)) : '');
-          const recName = o.receivingName || (statusLower === 'delivered' ? getDeterministicName(o.id, 'receiver', o) : '');
+          const dName = (statusLower === 'shipped' || statusLower === 'delivered') ? getDriverName(o) : '';
+          const delBy = statusLower === 'delivered' ? getDeliveredBy(o) : '';
+          const recName = statusLower === 'delivered' ? getReceiverName(o) : '';
 
           o.items.forEach(item => {
             const row = [
@@ -1820,9 +1808,9 @@ export default function ReportExportCard({ orders }: ReportExportCardProps) {
           const serialsDump = o.items.flatMap(i => i.serialNumbers || []).join("; ");
 
           const statusLower = (o.status || '').toLowerCase();
-          const dName = o.driverName || ((statusLower === 'shipped' || statusLower === 'delivered') ? getDeterministicName(o.id, 'driver', o) : '');
-          const delBy = o.deliveredBy || (statusLower === 'delivered' ? (o.driverName || getDeterministicName(o.id, 'driver', o)) : '');
-          const recName = o.receivingName || (statusLower === 'delivered' ? getDeterministicName(o.id, 'receiver', o) : '');
+          const dName = (statusLower === 'shipped' || statusLower === 'delivered') ? getDriverName(o) : '';
+          const delBy = statusLower === 'delivered' ? getDeliveredBy(o) : '';
+          const recName = statusLower === 'delivered' ? getReceiverName(o) : '';
 
           const row = [
             o.id,

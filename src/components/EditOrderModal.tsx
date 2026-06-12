@@ -1,9 +1,57 @@
 import React, { useState, useEffect } from 'react';
 import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
-import { db } from '../firebase';
+import { auth, db } from '../firebase';
 import { X, Save, Trash2, Plus, MapPin, Hash, Package, AlertCircle, Truck, CheckCircle } from 'lucide-react';
 import { Order } from '../types';
 import ScannedItemsManager from './ScannedItemsManager';
+
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData?.map(provider => ({
+        providerId: provider.providerId,
+        email: provider.email,
+          })) || []
+    },
+    operationType,
+    path
+  };
+  const stringifiedError = JSON.stringify(errInfo);
+  console.error('Firestore Error Details: ', stringifiedError);
+  throw new Error(stringifiedError);
+}
 
 interface EditOrderModalProps {
   order: Order | null;
@@ -36,14 +84,18 @@ const LOCATIONS = [
   'The Curve'
 ];
 
-const formatTimeAMPM = (date: Date, includeSeconds = false) => {
+const formatTimeAMPM = (date: Date, includeSeconds = false, lowercase = false) => {
   let hours = date.getHours();
   const minutes = String(date.getMinutes()).padStart(2, '0');
   const seconds = String(date.getSeconds()).padStart(2, '0');
-  const ampm = hours >= 12 ? 'PM' : 'AM';
+  let ampm = hours >= 12 ? 'PM' : 'AM';
   hours = hours % 12;
   hours = hours ? hours : 12;
   const hrStr = String(hours).padStart(2, '0');
+  
+  if (lowercase) {
+    ampm = ampm.toLowerCase();
+  }
   
   if (includeSeconds) {
     return `${hrStr}:${minutes}:${seconds} ${ampm}`;
@@ -170,29 +222,59 @@ export default function EditOrderModal({ order, isOpen, onClose }: EditOrderModa
         };
       });
 
+      const pickedItems: Record<string, any> = {};
+      finalItems.forEach(item => {
+        pickedItems[item.name] = {
+          count: item.quantity,
+          firstSeen: formatTimeAMPM(now, true, true),
+          serialNumbers: item.serialNumbers
+        };
+      });
+
+      const shippedItems: Record<string, any> = {};
+      finalItems.forEach(item => {
+        shippedItems[item.name] = {
+          count: item.quantity,
+          firstSeen: formatTimeAMPM(now, true, true),
+          serialNumbers: item.serialNumbers
+        };
+      });
+
       const totalItemsVal = finalItems.reduce((acc, item) => acc + item.quantity, 0);
       const uniqueItemsVal = finalItems.length;
 
       const orderRef = doc(db, 'orders', order.id);
       
-      await updateDoc(orderRef, {
-        shippingAddress: shippingAddress.trim(),
-        location: shippingAddress.trim(),
-        status,
-        items: itemsMap,
-        totalItems: totalItemsVal,
-        uniqueItems: uniqueItemsVal,
-        remark: remark.trim(),
-        driverName: driverName.trim(),
-        deliveredBy: deliveredBy.trim(),
-        receivingName: receivingName.trim(),
-        updatedAt: serverTimestamp()
-      });
+      try {
+        await updateDoc(orderRef, {
+          shippingAddress: shippingAddress.trim(),
+          location: shippingAddress.trim(),
+          status,
+          items: itemsMap,
+          pickedItems,
+          shippedItems,
+          totalItems: totalItemsVal,
+          uniqueItems: uniqueItemsVal,
+          remark: remark.trim(),
+          driverName: driverName.trim(),
+          deliveredBy: deliveredBy.trim(),
+          receivingName: receivingName.trim(),
+          updatedAt: serverTimestamp()
+        });
+      } catch (writeErr) {
+        handleFirestoreError(writeErr, OperationType.WRITE, `orders/${order.id}`);
+      }
 
       onClose();
     } catch (err: any) {
       console.error('Failed to update order:', err);
-      setErrorStr(err.message || 'An error occurred while updating the order.');
+      try {
+        // If it was already stringified by handleFirestoreError, parse the message part
+        const parsed = JSON.parse(err.message);
+        setErrorStr(parsed.error || 'Permission denied or writing failed.');
+      } catch {
+        setErrorStr(err.message || 'An error occurred while updating the order.');
+      }
     } finally {
       setLoading(false);
     }
