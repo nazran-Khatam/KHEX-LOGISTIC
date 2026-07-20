@@ -151,7 +151,7 @@ function getResolvedMovement(order: Order): any[] {
 }
 
 // Extract pickup date of an order
-function getPickupDate(order: Order | undefined): Date | null {
+function getPickupDate(order: Order | undefined, strict = false): Date | null {
   if (!order) return null;
   if (order.pickedAt && (typeof order.pickedAt !== 'string' || order.pickedAt.trim() !== '')) {
     const d = universalParseDate(order.pickedAt);
@@ -169,6 +169,8 @@ function getPickupDate(order: Order | undefined): Date | null {
     }
   }
 
+  if (strict) return null;
+
   if (order.status === 'shipped' || order.status === 'delivered') {
     const createdTime = universalParseDate(order.orderDate) || new Date();
     return new Date(createdTime.getTime() + 1.5 * 3600 * 1000);
@@ -178,7 +180,7 @@ function getPickupDate(order: Order | undefined): Date | null {
 }
 
 // Extract delivery date of an order
-function getDeliveryDate(order: Order | undefined): Date | null {
+function getDeliveryDate(order: Order | undefined, strict = false): Date | null {
   if (!order) return null;
   if (order.deliveredAt && (typeof order.deliveredAt !== 'string' || order.deliveredAt.trim() !== '')) {
     const d = universalParseDate(order.deliveredAt);
@@ -225,6 +227,8 @@ function getDeliveryDate(order: Order | undefined): Date | null {
     }
   }
   
+  if (strict) return null;
+
   if (order.status === 'delivered') {
     return universalParseDate(order.updatedAt) || new Date();
   }
@@ -392,8 +396,8 @@ export default function OverviewDashboard({
   let validCount = 0;
 
   displayOrders.forEach(order => {
-    const pickupDate = getPickupDate(order);
-    const receivedDate = getDeliveryDate(order);
+    const pickupDate = getPickupDate(order, true);
+    const receivedDate = getDeliveryDate(order, true);
 
     if (pickupDate && receivedDate) {
       const diff = Math.max(0, receivedDate.getTime() - pickupDate.getTime());
@@ -419,8 +423,8 @@ export default function OverviewDashboard({
       acc[loc].delivered += 1;
 
       // Extract delivery transit duration
-      const pickupDate = getPickupDate(order);
-      const receivedDate = getDeliveryDate(order);
+      const pickupDate = getPickupDate(order, true);
+      const receivedDate = getDeliveryDate(order, true);
       if (pickupDate && receivedDate) {
         const diff = Math.max(0, receivedDate.getTime() - pickupDate.getTime());
         const diffDays = diff / (1000 * 60 * 60 * 24);

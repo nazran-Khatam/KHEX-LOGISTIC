@@ -105,7 +105,7 @@ export function getReceiverName(order: Order): string {
   return getDeterministicName(order.id, 'receiver', order);
 }
 
-export function getPickupDate(order: Order | undefined): Date | null {
+export function getPickupDate(order: Order | undefined, strict = false): Date | null {
   if (!order) return null;
   if (order.pickedAt && (typeof order.pickedAt !== 'string' || order.pickedAt.trim() !== '')) {
     const d = universalParseDate(order.pickedAt);
@@ -123,6 +123,8 @@ export function getPickupDate(order: Order | undefined): Date | null {
     }
   }
 
+  if (strict) return null;
+
   if (order.status === 'shipped' || order.status === 'delivered') {
     const createdTime = universalParseDate(order.orderDate) || new Date();
     return new Date(createdTime.getTime() + 1.5 * 3600 * 1000);
@@ -131,7 +133,7 @@ export function getPickupDate(order: Order | undefined): Date | null {
   return null;
 }
 
-export function getDeliveryDate(order: Order | undefined): Date | null {
+export function getDeliveryDate(order: Order | undefined, strict = false): Date | null {
   if (!order) return null;
   if (order.deliveredAt && (typeof order.deliveredAt !== 'string' || order.deliveredAt.trim() !== '')) {
     const d = universalParseDate(order.deliveredAt);
@@ -177,6 +179,8 @@ export function getDeliveryDate(order: Order | undefined): Date | null {
       }
     }
   }
+  
+  if (strict) return null;
   
   if (order.status === 'delivered') {
     const d = universalParseDate(order.updatedAt);
