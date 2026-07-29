@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Order } from '../types';
 import { Download, FileSpreadsheet, FileJson, SlidersHorizontal, CheckCircle, Info, Upload, FileUp, RefreshCw, AlertTriangle, Trash2, Loader2, Check, Calendar, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
 import { motion } from 'motion/react';
-import { getDeterministicName, getDriverName, getDeliveredBy, getReceiverName, getPickupDate, getDeliveryDate } from './OrderDetails';
+import { getDeterministicName, getDriverName, getDeliveredBy, getReceiverName, getPickupDate, getDeliveryDate, getReadyDate } from './OrderDetails';
 import { universalParseDate } from './OverviewDashboard';
 import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -187,6 +187,8 @@ function getResolvedMovement(order: Order): any[] {
 
   const resolvedMovement = [...(order.movement || [])];
   const createdTime = safeGetDate(order.orderDate);
+  const pickupDateVal = getPickupDate(order);
+  const deliveryDateVal = getDeliveryDate();
 
   // 1. Ensure "Order Placed" is present
   const hasOrderPlaced = resolvedMovement.some(m => {
@@ -209,34 +211,68 @@ function getResolvedMovement(order: Order): any[] {
   });
   const placementTime = orderPlacedStep ? safeGetDate(orderPlacedStep.timestamp) : createdTime;
 
-  // 2. Ensure "Picked up by Driver" or similar pickup step is present for shipped or delivered orders
+  const pickupTime = pickupDateVal && !isNaN(pickupDateVal.getTime())
+    ? pickupDateVal
+    : new Date(placementTime.getTime() + 1.5 * 3600 * 1000);
+
+  let readyTime: Date;
+  const readyDateVal = getReadyDate(order, true);
+  if (readyDateVal && !isNaN(readyDateVal.getTime())) {
+    readyTime = readyDateVal;
+  } else if (pickupTime && pickupTime > placementTime && (order.status === 'shipped' || order.status === 'delivered')) {
+    readyTime = new Date(placementTime.getTime() + Math.max(60000, Math.floor((pickupTime.getTime() - placementTime.getTime()) / 2)));
+  } else {
+    readyTime = placementTime;
+  }
+
+  // 2. Ensure "Ready to Pickup" is present for ready, shipped, or delivered orders
+  const isReadyOrBeyond = order.status === 'ready' || order.status === 'shipped' || order.status === 'delivered' || !!order.readyTime || !!order.readyAt || !!order.pickedAt || (order.pickedItems && Object.keys(order.pickedItems).length > 0);
+  if (isReadyOrBeyond) {
+    const readyStepIdx = resolvedMovement.findIndex(m => {
+      const s = (m.status || '').toLowerCase();
+      return s.includes('ready') || s.includes('prepare');
+    });
+    if (readyStepIdx === -1) {
+      resolvedMovement.push({
+        status: 'Ready to Pickup',
+        timestamp: readyTime,
+        location: 'Khex Sorting Facility',
+        description: 'Package verified, processed, and ready for driver pickup.'
+      } as any);
+    } else if (readyDateVal) {
+      resolvedMovement[readyStepIdx] = {
+        ...resolvedMovement[readyStepIdx],
+        timestamp: readyDateVal
+      };
+    }
+  }
+
+  // 3. Ensure "Pickup by Driver" is present for shipped or delivered orders
   if (order.status === 'shipped' || order.status === 'delivered') {
     const hasPickup = resolvedMovement.some(m => {
       const s = (m.status || '').toLowerCase();
-      return s.includes('ship') || s.includes('transit') || s.includes('pick');
+      return !s.includes('ready') && (s.includes('ship') || s.includes('transit') || s.includes('pick') || s.includes('driver'));
     });
     if (!hasPickup) {
-      const shippedTime = new Date(placementTime.getTime() + 1.5 * 3600 * 1000);
       resolvedMovement.push({
-        status: 'Picked up by Driver',
-        timestamp: shippedTime,
+        status: 'Pickup by Driver',
+        timestamp: pickupTime,
         location: 'Khex Sorting Facility',
         description: 'Package picked up by dispatch driver for immediate transit.'
       } as any);
     }
   }
 
-  // 3. Ensure "Delivered" or similar delivery step is present for delivered orders
+  // 4. Ensure "Delivered" is present for delivered orders
   if (order.status === 'delivered') {
     const hasDelivery = resolvedMovement.some(m => {
       const s = (m.status || '').toLowerCase();
       return s.includes('deliver') || s.includes('received');
     });
     if (!hasDelivery) {
-      const deliveryDate = getDeliveryDate();
-      const deliveredTime = deliveryDate && !isNaN(deliveryDate.getTime())
-        ? deliveryDate
-        : new Date(placementTime.getTime() + 4 * 3600 * 1000);
+      const deliveredTime = deliveryDateVal && !isNaN(deliveryDateVal.getTime())
+        ? deliveryDateVal
+        : new Date(pickupTime.getTime() + 2 * 3600 * 1000);
 
       resolvedMovement.push({
         status: 'Delivered',
@@ -248,23 +284,19 @@ function getResolvedMovement(order: Order): any[] {
   }
 
   return resolvedMovement.slice().sort((a, b) => {
-    const dateA = safeGetDate(a.timestamp);
-    const dateB = safeGetDate(b.timestamp);
-    const diff = dateA.getTime() - dateB.getTime();
-    if (diff !== 0) return diff;
-    
-    const getPrec = (status: string) => {
+    const getStagePrec = (status: string) => {
       const s = (status || '').toLowerCase();
       if (s.includes('place') || s.includes('create')) return 1;
-      if (s.includes('pick') || s.includes('ship') || s.includes('transit')) return 2;
-      if (s.includes('deliver') || s.includes('receive')) return 3;
-      return 4;
+      if (s.includes('ready') || s.includes('prepare')) return 2;
+      if (s.includes('pick') || s.includes('ship') || s.includes('transit')) return 3;
+      if (s.includes('deliver') || s.includes('receive')) return 4;
+      return 5;
     };
-    return getPrec(a.status) - getPrec(b.status);
+    return getStagePrec(a.status) - getStagePrec(b.status);
   });
 }
 
-function getMovementDate(order: Order, targetStatus: 'shipped' | 'delivered'): Date | null {
+function getMovementDate(order: Order, targetStatus: 'ready' | 'shipped' | 'delivered'): Date | null {
   if (!order) return null;
   
   const resolvedMovement = getResolvedMovement(order);
@@ -273,10 +305,18 @@ function getMovementDate(order: Order, targetStatus: 'shipped' | 'delivered'): D
     return universalParseDate(date) || new Date();
   };
 
-  if (targetStatus === 'shipped') {
+  if (targetStatus === 'ready') {
     const step = resolvedMovement.find(m => {
       const statusLower = (m.status || '').toLowerCase();
-      return statusLower.includes('ship') || statusLower.includes('transit') || statusLower.includes('pick');
+      return statusLower.includes('ready') || statusLower.includes('prepare');
+    });
+    if (step && step.timestamp) {
+      return safeGetDate(step.timestamp);
+    }
+  } else if (targetStatus === 'shipped') {
+    const step = resolvedMovement.find(m => {
+      const statusLower = (m.status || '').toLowerCase();
+      return !statusLower.includes('ready') && (statusLower.includes('ship') || statusLower.includes('transit') || statusLower.includes('pick') || statusLower.includes('driver'));
     });
     if (step && step.timestamp) {
       return safeGetDate(step.timestamp);
@@ -314,10 +354,22 @@ function isTimeFieldChanged(proposedStr: string, originalDate: Date | null): boo
   return Math.abs(proposedDate.getTime() - originalDate.getTime()) >= 5000;
 }
 
-function getMovementTime(order: Order, targetStatus: 'shipped' | 'delivered'): string {
+function getMovementTime(order: Order, targetStatus: 'ready' | 'shipped' | 'delivered'): string {
   if (!order) return 'N/A';
   
-  if (targetStatus === 'shipped') {
+  if (targetStatus === 'ready') {
+    const resolvedMovement = getResolvedMovement(order);
+    const step = resolvedMovement.find(m => {
+      const statusLower = (m.status || '').toLowerCase();
+      return statusLower.includes('ready') || statusLower.includes('prepare');
+    });
+    if (step && step.timestamp) {
+      const d = universalParseDate(step.timestamp);
+      if (d && !isNaN(d.getTime())) {
+        return d.toLocaleString('en-GB');
+      }
+    }
+  } else if (targetStatus === 'shipped') {
     const d = getPickupDate(order);
     if (d && !isNaN(d.getTime())) {
       return d.toLocaleString('en-GB');
@@ -348,6 +400,8 @@ interface BulkPreviewItem {
   proposedReceiver: string;
   originalRemark: string;
   proposedRemark: string;
+  originalReadyTime?: string;
+  proposedReadyTime?: string;
   originalPickupTime?: string;
   proposedPickupTime?: string;
   originalReceivedTime?: string;
@@ -385,6 +439,7 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
       headers = [
         "Order ID",
         "Date Created",
+        "Ready Time",
         "Pickup Time",
         "Received Time",
         "Created By",
@@ -406,6 +461,7 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
         new Date().toLocaleString('en-GB'),
         "N/A",
         "N/A",
+        "N/A",
         "Khex Terminal Node",
         "KHEX Sorting Facility, KLIA",
         "SHIPPED",
@@ -424,6 +480,7 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
       headers = [
         "Order ID",
         "Date Created",
+        "Ready Time",
         "Pickup Time",
         "Received Time",
         "Created By",
@@ -443,6 +500,7 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
       exampleRow = [
         "ID_OF_EXISTING_ORDER_HERE",
         new Date().toLocaleString('en-GB'),
+        "N/A",
         "N/A",
         "N/A",
         "Khex Terminal Node",
@@ -477,6 +535,7 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
       headers = [
         "Order ID",
         "Date Created",
+        "Ready Time",
         "Pickup Time",
         "Received Time",
         "Created By",
@@ -499,6 +558,7 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
         const dateStr = o.orderDate?.toDate ? o.orderDate.toDate().toLocaleString('en-GB') : new Date(o.orderDate || '').toLocaleString('en-GB');
         const resolvedMovement = getResolvedMovement(o);
         const lastMove = resolvedMovement.length > 0 ? resolvedMovement[resolvedMovement.length - 1].status : "No record";
+        const readyStr = getMovementTime(o, 'ready');
         const pickupStr = getMovementTime(o, 'shipped');
         const receivedStr = getMovementTime(o, 'delivered');
         
@@ -511,9 +571,10 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
           const row = [
             o.id,
             dateStr,
+            readyStr,
             pickupStr,
             receivedStr,
-            o.userId || "Khex Terminal Node",
+            o.createdBy || o.userId || "Khex Terminal Node",
             o.shippingAddress,
             o.status.toUpperCase(),
             o.trackingNumber || "N/A",
@@ -534,6 +595,7 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
       headers = [
         "Order ID",
         "Date Created",
+        "Ready Time",
         "Pickup Time",
         "Received Time",
         "Created By",
@@ -556,6 +618,7 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
         const dateStr = o.orderDate?.toDate ? o.orderDate.toDate().toLocaleString('en-GB') : new Date(o.orderDate || '').toLocaleString('en-GB');
         const resolvedMovement = getResolvedMovement(o);
         const lastMove = resolvedMovement.length > 0 ? resolvedMovement[resolvedMovement.length - 1].status : "No record";
+        const readyStr = getMovementTime(o, 'ready');
         const pickupStr = getMovementTime(o, 'shipped');
         const receivedStr = getMovementTime(o, 'delivered');
         
@@ -573,9 +636,10 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
         const row = [
           o.id,
           dateStr,
+          readyStr,
           pickupStr,
           receivedStr,
-          o.userId || "Khex Terminal Node",
+          o.createdBy || o.userId || "Khex Terminal Node",
           o.shippingAddress,
           o.status.toUpperCase(),
           o.trackingNumber || "N/A",
@@ -619,6 +683,7 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
       const remarkIdx = headerRow.findIndex(h => h === 'special remark' || h === 'remark' || h === 'remarks' || h === 'comment' || h === 'notes');
       
       // Additional columns for item-level and movement-level edits
+      const readyTimeIdx = headerRow.findIndex(h => h === 'ready time' || h === 'ready_time' || h === 'ready timestamp' || h === 'ready_timestamp');
       const pickupTimeIdx = headerRow.findIndex(h => h === 'pickup time' || h === 'pickup_time' || h === 'dispatched time' || h === 'shipped time');
       const receivedTimeIdx = headerRow.findIndex(h => h === 'received time' || h === 'received_time' || h === 'delivered time' || h === 'delivery time');
       const productNameIdx = headerRow.findIndex(h => h === 'product name' || h === 'product_name' || h === 'product' || h === 'item');
@@ -639,6 +704,7 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
         deliveredBys: string[];
         receivers: string[];
         remarks: string[];
+        readyTimes: string[];
         pickupTimes: string[];
         receivedTimes: string[];
         lastLoggedStatuses: string[];
@@ -664,6 +730,7 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
         const rec = receiverIdx !== -1 ? (row[receiverIdx] || '').trim() : '';
         const rem = remarkIdx !== -1 ? (row[remarkIdx] || '').trim() : '';
 
+        const readyStr = readyTimeIdx !== -1 ? (row[readyTimeIdx] || '').trim() : '';
         const pickupStr = pickupTimeIdx !== -1 ? (row[pickupTimeIdx] || '').trim() : '';
         const receivedStr = receivedTimeIdx !== -1 ? (row[receivedTimeIdx] || '').trim() : '';
         const prodName = productNameIdx !== -1 ? (row[productNameIdx] || '').trim() : '';
@@ -680,6 +747,7 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
             deliveredBys: [],
             receivers: [],
             remarks: [],
+            readyTimes: [],
             pickupTimes: [],
             receivedTimes: [],
             lastLoggedStatuses: [],
@@ -695,6 +763,7 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
         if (delBy) group.deliveredBys.push(delBy);
         if (rec) group.receivers.push(rec);
         if (rem) group.remarks.push(rem);
+        if (readyStr) group.readyTimes.push(readyStr);
         if (pickupStr) group.pickupTimes.push(pickupStr);
         if (receivedStr) group.receivedTimes.push(receivedStr);
         if (lastLogStat) group.lastLoggedStatuses.push(lastLogStat);
@@ -721,6 +790,7 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
         let proposedDeliveredBy = group.deliveredBys[0] || '';
         let proposedReceiver = group.receivers[0] || '';
         let proposedRemark = group.remarks[0] || '';
+        let proposedReadyTime = group.readyTimes[0] || '';
         let proposedPickupTime = group.pickupTimes[0] || '';
         let proposedReceivedTime = group.receivedTimes[0] || '';
         let proposedLastLoggedStatus = group.lastLoggedStatuses[0] || '';
@@ -737,6 +807,7 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
         const originalReceiver = matched ? (matchedStatusLower === 'delivered' ? getReceiverName(matched) : '') : '';
 
         const originalRemark = matched ? (matched.remark || '') : '';
+        const originalReadyTime = matched ? getMovementTime(matched, 'ready') : 'N/A';
         const originalPickupTime = matched ? getMovementTime(matched, 'shipped') : 'N/A';
         const originalReceivedTime = matched ? getMovementTime(matched, 'delivered') : 'N/A';
         const resolvedOriginalMovement = matched ? getResolvedMovement(matched) : [];
@@ -770,6 +841,9 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
           }
           if (remarkIdx === -1 || group.remarks.length === 0 || !isStringFieldChanged(proposedRemark, originalRemark)) {
             proposedRemark = originalRemark;
+          }
+          if (readyTimeIdx === -1 || group.readyTimes.length === 0 || !isTimeFieldChanged(proposedReadyTime, getMovementDate(matched, 'ready'))) {
+            proposedReadyTime = originalReadyTime;
           }
           if (pickupTimeIdx === -1 || group.pickupTimes.length === 0 || !isTimeFieldChanged(proposedPickupTime, getMovementDate(matched, 'shipped'))) {
             proposedPickupTime = originalPickupTime;
@@ -875,6 +949,10 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
             changesCount++;
             modifiedFields.push('Remark');
           }
+          if (isStringFieldChanged(proposedReadyTime, originalReadyTime)) {
+            changesCount++;
+            modifiedFields.push('Ready Time');
+          }
           if (isStringFieldChanged(proposedPickupTime, originalPickupTime)) {
             changesCount++;
             modifiedFields.push('Pickup Time');
@@ -911,6 +989,8 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
           proposedReceiver: proposedReceiver || originalReceiver,
           originalRemark,
           proposedRemark,
+          originalReadyTime,
+          proposedReadyTime,
           originalPickupTime,
           proposedPickupTime,
           originalReceivedTime,
@@ -1020,20 +1100,40 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
 
         if (item.proposedItems && compareItems(item.originalItems, item.proposedItems)) {
           const itemsMap: Record<string, any> = {};
+          const pickedItemsMap: Record<string, any> = {};
+          const shippedItemsMap: Record<string, any> = {};
           let totalItemsVal = 0;
           let uniqueItemsVal = 0;
           
           item.proposedItems.forEach((pItem: any) => {
             totalItemsVal += Number(pItem.quantity);
             uniqueItemsVal++;
+            
+            const firstSeenVal = formatTimeAMPM(new Date(), true);
+            const firstSeenValLower = firstSeenVal.toLowerCase();
+            
             itemsMap[pItem.name] = {
               count: Number(pItem.quantity),
-              firstSeen: formatTimeAMPM(new Date(), true),
+              firstSeen: firstSeenVal,
+              serialNumbers: pItem.serialNumbers || []
+            };
+            
+            pickedItemsMap[pItem.name] = {
+              count: Number(pItem.quantity),
+              firstSeen: firstSeenValLower,
+              serialNumbers: pItem.serialNumbers || []
+            };
+            
+            shippedItemsMap[pItem.name] = {
+              count: Number(pItem.quantity),
+              firstSeen: firstSeenValLower,
               serialNumbers: pItem.serialNumbers || []
             };
           });
           
           fieldsToUpdate.items = itemsMap;
+          fieldsToUpdate.pickedItems = pickedItemsMap;
+          fieldsToUpdate.shippedItems = shippedItemsMap;
           fieldsToUpdate.totalItems = totalItemsVal;
           fieldsToUpdate.uniqueItems = uniqueItemsVal;
         }
@@ -1043,6 +1143,61 @@ export function BulkUploadControl({ orders, getFilteredOrders, locationFilter, s
         if (matched) {
           let movementToUpdate = [...(matched.movement || [])];
           let movementChanged = false;
+
+          // 0. Check ready step
+          if (isStringFieldChanged(item.proposedReadyTime, item.originalReadyTime)) {
+            let readyStepIdx = movementToUpdate.findIndex(m => {
+              const sl = (m.status || '').toLowerCase();
+              return sl.includes('ready') || sl.includes('prepare');
+            });
+
+            const [datePart, timePart] = item.proposedReadyTime.split(',');
+            let parsedDate = new Date(item.proposedReadyTime);
+            if (datePart && timePart) {
+              const parts = datePart.trim().split('/');
+              if (parts.length === 3) {
+                const day = parseInt(parts[0], 10);
+                const month = parseInt(parts[1], 10) - 1;
+                const year = parseInt(parts[2], 10);
+                const timeParts = timePart.trim().split(':');
+                let hr = 0, min = 0, sec = 0;
+                if (timeParts.length >= 2) {
+                  hr = parseInt(timeParts[0], 10);
+                  min = parseInt(timeParts[1], 10);
+                  if (timeParts.length >= 3) {
+                    sec = parseInt(timeParts[2].replace(/\s*(AM|PM)/i, ''), 10);
+                    const isPm = /pm/i.test(timeParts[2]);
+                    if (isPm && hr < 12) hr += 12;
+                    if (!isPm && hr === 12 && /am/i.test(timeParts[2])) hr = 0;
+                  }
+                }
+                const dStr = new Date(year, month, day, hr, min, sec);
+                if (!isNaN(dStr.getTime())) {
+                  parsedDate = dStr;
+                }
+              }
+            }
+
+            if (!isNaN(parsedDate.getTime())) {
+              const stdStr = formatDateToStandardString(parsedDate);
+              fieldsToUpdate.readyAt = stdStr;
+              fieldsToUpdate.readyTime = stdStr;
+              if (readyStepIdx !== -1) {
+                movementToUpdate[readyStepIdx] = {
+                  ...movementToUpdate[readyStepIdx],
+                  timestamp: parsedDate
+                };
+              } else {
+                movementToUpdate.push({
+                  status: 'Ready to Pickup',
+                  timestamp: parsedDate,
+                  location: 'Khex Sorting Facility',
+                  description: 'Package verified, processed, and ready for driver pickup.'
+                });
+              }
+              movementChanged = true;
+            }
+          }
 
           // 1. Check pickup step
           if (isStringFieldChanged(item.proposedPickupTime, item.originalPickupTime)) {
@@ -1782,6 +1937,7 @@ export default function ReportExportCard({ orders }: ReportExportCardProps) {
           headers = [
             "ID",
             "Date Created",
+            "Ready Time",
             "Pickup Time",
             "Received Time",
             "Destination",
@@ -1795,6 +1951,7 @@ export default function ReportExportCard({ orders }: ReportExportCardProps) {
           targetOrders.forEach(o => {
             const parsedDate = universalParseDate(o.orderDate);
             const dateStr = parsedDate ? parsedDate.toLocaleString('en-GB') : '-';
+            const readyStr = getMovementTime(o, 'ready') || '-';
             const pickupStr = getMovementTime(o, 'shipped') || '-';
             const receivedStr = getMovementTime(o, 'delivered') || '-';
             
@@ -1806,6 +1963,7 @@ export default function ReportExportCard({ orders }: ReportExportCardProps) {
               rows.push([
                 o.id,
                 dateStr,
+                readyStr,
                 pickupStr,
                 receivedStr,
                 o.shippingAddress || '-',
@@ -1821,6 +1979,7 @@ export default function ReportExportCard({ orders }: ReportExportCardProps) {
           headers = [
             "ID",
             "Date Created",
+            "Ready Time",
             "Pickup Time",
             "Received Time",
             "Destination",
@@ -1833,6 +1992,7 @@ export default function ReportExportCard({ orders }: ReportExportCardProps) {
           targetOrders.forEach(o => {
             const parsedDate = universalParseDate(o.orderDate);
             const dateStr = parsedDate ? parsedDate.toLocaleString('en-GB') : '-';
+            const readyStr = getMovementTime(o, 'ready') || '-';
             const pickupStr = getMovementTime(o, 'shipped') || '-';
             const receivedStr = getMovementTime(o, 'delivered') || '-';
             const statusLower = (o.status || '').toLowerCase();
@@ -1843,6 +2003,7 @@ export default function ReportExportCard({ orders }: ReportExportCardProps) {
           rows.push([
             o.id,
             dateStr,
+            readyStr,
             pickupStr,
             receivedStr,
             o.shippingAddress || '-',
@@ -1863,8 +2024,8 @@ export default function ReportExportCard({ orders }: ReportExportCardProps) {
           styles: { fontSize: 8 },
           columnStyles: {
             0: { cellWidth: 22 },
-            4: { cellWidth: 35 },
-            9: { cellWidth: 40 },
+            5: { cellWidth: 35 },
+            10: { cellWidth: 40 },
           }
         });
 
@@ -1880,6 +2041,7 @@ export default function ReportExportCard({ orders }: ReportExportCardProps) {
         const headers = [
           "Order ID",
           "Date Created",
+          "Ready Time",
           "Pickup Time",
           "Received Time",
           "Created By",
@@ -1903,6 +2065,7 @@ export default function ReportExportCard({ orders }: ReportExportCardProps) {
           const dateStr = o.orderDate?.toDate ? o.orderDate.toDate().toLocaleString('en-GB') : new Date(o.orderDate || '').toLocaleString('en-GB');
           const resolvedMovement = getResolvedMovement(o);
           const lastMove = resolvedMovement.length > 0 ? resolvedMovement[resolvedMovement.length - 1].status : "No record";
+          const readyStr = getMovementTime(o, 'ready');
           const pickupStr = getMovementTime(o, 'shipped');
           const receivedStr = getMovementTime(o, 'delivered');
           
@@ -1915,9 +2078,10 @@ export default function ReportExportCard({ orders }: ReportExportCardProps) {
             const row = [
               o.id,
               dateStr,
+              readyStr,
               pickupStr,
               receivedStr,
-              o.userId || "Khex Terminal Node",
+              o.createdBy || o.userId || "Khex Terminal Node",
               o.shippingAddress,
               o.status.toUpperCase(),
               o.trackingNumber || "N/A",
@@ -1941,6 +2105,7 @@ export default function ReportExportCard({ orders }: ReportExportCardProps) {
         const headers = [
           "Order ID",
           "Date Created",
+          "Ready Time",
           "Pickup Time",
           "Received Time",
           "Created By",
@@ -1964,6 +2129,7 @@ export default function ReportExportCard({ orders }: ReportExportCardProps) {
           const dateStr = o.orderDate?.toDate ? o.orderDate.toDate().toLocaleString('en-GB') : new Date(o.orderDate || '').toLocaleString('en-GB');
           const resolvedMovement = getResolvedMovement(o);
           const lastMove = resolvedMovement.length > 0 ? resolvedMovement[resolvedMovement.length - 1].status : "No record";
+          const readyStr = getMovementTime(o, 'ready');
           const pickupStr = getMovementTime(o, 'shipped');
           const receivedStr = getMovementTime(o, 'delivered');
           
@@ -1981,9 +2147,10 @@ export default function ReportExportCard({ orders }: ReportExportCardProps) {
           const row = [
             o.id,
             dateStr,
+            readyStr,
             pickupStr,
             receivedStr,
-            o.userId || "Khex Terminal Node",
+            o.createdBy || o.userId || "Khex Terminal Node",
             o.shippingAddress,
             o.status.toUpperCase(),
             o.trackingNumber || "N/A",

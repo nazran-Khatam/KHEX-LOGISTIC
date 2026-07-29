@@ -236,6 +236,8 @@ export default function CreateOrder({ userId, onSuccess }: CreateOrderProps) {
         time: timeStr,
         deliveredAt: '',
         pickedAt: '',
+        readyAt: '',
+        readyTime: '',
         location: shippingAddress.trim(),
         totalItems: totalItemsVal,
         uniqueItems: uniqueItemsVal,

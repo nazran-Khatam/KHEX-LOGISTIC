@@ -6,48 +6,13 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    function isOwner(userId) {
-      return isSignedIn() && request.auth.uid == userId;
-    }
-
-    function isValidId(id) {
-      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
-    }
-
-    // Order validation
-    function isValidOrder(data) {
-      return data.userId is string &&
-             data.status in ['pending', 'shipped', 'delivered'] &&
-             (data.items is list || data.items is map) &&
-             data.updatedAt == request.time;
-    }
-
     // Deny all by default
     match /{document=**} {
       allow read, write: if false;
     }
 
     match /orders/{orderId} {
-      allow get: if isSignedIn();
-      allow list: if isSignedIn();
-      
-      allow create: if isSignedIn() && 
-                      isValidOrder(request.resource.data) &&
-                      request.resource.data.orderDate == request.time;
-
-      allow update: if isSignedIn() && 
-                      isValidOrder(request.resource.data) &&
-                      request.resource.data.userId == resource.data.userId &&
-                      (
-                        // Allow updating status, location, items, remarks, and delivery/routing details
-                        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-                          'status', 'trackingNumber', 'updatedAt', 'movement', 
-                          'shippingAddress', 'location', 'items', 'totalItems', 'uniqueItems', 'remark',
-                          'driverName', 'deliveredBy', 'receivingName', 'shippedItems', 'pickedItems'
-                        ])
-                      );
-      
-      allow delete: if false; // Orders cannot be deleted by users
+      allow read, write: if isSignedIn();
     }
   }
 }

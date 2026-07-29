@@ -18,6 +18,7 @@ export interface OrderItem {
 export interface Order {
   id: string;
   userId: string;
+  createdBy?: string;
   orderDate: any; // Firestore Timestamp
   status: OrderStatus;
   trackingNumber?: string;
@@ -35,4 +36,6 @@ export interface Order {
   receivedBy?: string;
   pickedAt?: any; // Firestore Timestamp / Any
   deliveredAt?: any; // Firestore Timestamp / Any
+  readyAt?: any; // Firestore Timestamp / Any
+  readyTime?: any; // Firestore Timestamp / Any
 }

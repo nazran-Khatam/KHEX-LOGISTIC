@@ -108,6 +108,16 @@ const formatTimeAMPM = (date: Date, includeSeconds = false, lowercase = false) =
   return `${hrStr}:${minutes} ${ampm}`;
 };
 
+const formatDateToStandardString = (date: Date): string => {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  const hh = String(date.getHours()).padStart(2, '0');
+  const min = String(date.getMinutes()).padStart(2, '0');
+  const ss = String(date.getSeconds()).padStart(2, '0');
+  return `${dd}/${mm}/${yyyy}, ${hh}:${min}:${ss}`;
+};
+
 export default function EditOrderModal({ order, isOpen, onClose }: EditOrderModalProps) {
   const [shippingAddress, setShippingAddress] = useState('');
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
@@ -251,7 +261,7 @@ export default function EditOrderModal({ order, isOpen, onClose }: EditOrderModa
       const orderRef = doc(db, 'orders', order.id);
       
       try {
-        await updateDoc(orderRef, {
+        const fieldsToUpdate: Record<string, any> = {
           shippingAddress: shippingAddress.trim(),
           location: shippingAddress.trim(),
           status,
@@ -265,7 +275,132 @@ export default function EditOrderModal({ order, isOpen, onClose }: EditOrderModa
           deliveredBy: deliveredBy.trim(),
           receivingName: receivingName.trim(),
           updatedAt: serverTimestamp()
-        });
+        };
+
+        // Enforce readyAt, readyTime, pickedAt, and deliveredAt based on status updates
+        if (status === 'pending') {
+          fieldsToUpdate.readyAt = '';
+          fieldsToUpdate.readyTime = '';
+          // Remove ready step from movement for pending status as requested
+          let movement = [...(order.movement || [])].filter(m => {
+            const s = (m.status || '').toLowerCase();
+            return !s.includes('ready') && !s.includes('prepare');
+          });
+          fieldsToUpdate.movement = movement;
+        } else if (status === 'pickup' || (status as string) === 'ready') {
+          const originalReadyAt = order.readyAt || order.readyTime;
+          if (!originalReadyAt) {
+            const stdStr = formatDateToStandardString(now);
+            fieldsToUpdate.readyAt = stdStr;
+            fieldsToUpdate.readyTime = stdStr;
+          }
+          fieldsToUpdate.pickedAt = ''; // Clear pickedAt since status is ready, not shipped
+          
+          let movement = [...(order.movement || [])];
+          const hasReady = movement.some(m => {
+            const s = (m.status || '').toLowerCase();
+            return s.includes('ready') || s.includes('prepare');
+          });
+          if (!hasReady) {
+            movement.push({
+              status: 'Ready to Pickup',
+              timestamp: now,
+              location: 'Khex Sorting Facility',
+              description: 'Package verified, processed, and ready for driver pickup.'
+            });
+            fieldsToUpdate.movement = movement;
+          }
+        } else if (status === 'shipped') {
+          const originalReadyAt = order.readyAt || order.readyTime;
+          if (!originalReadyAt) {
+            const stdStr = formatDateToStandardString(now);
+            fieldsToUpdate.readyAt = stdStr;
+            fieldsToUpdate.readyTime = stdStr;
+          }
+          if (!order.pickedAt) {
+            fieldsToUpdate.pickedAt = formatDateToStandardString(now);
+          }
+          
+          let movement = [...(order.movement || [])];
+          // Ensure Ready step
+          const hasReady = movement.some(m => (m.status || '').toLowerCase().includes('ready') || (m.status || '').toLowerCase().includes('prepare'));
+          if (!hasReady) {
+            movement.push({
+              status: 'Ready to Pickup',
+              timestamp: new Date(now.getTime() - 5 * 60 * 1000),
+              location: 'Khex Sorting Facility',
+              description: 'Package verified, processed, and ready for driver pickup.'
+            });
+          }
+          // Ensure Picked step
+          const hasPickup = movement.some(m => {
+            const s = (m.status || '').toLowerCase();
+            return !s.includes('ready') && (s.includes('ship') || s.includes('transit') || s.includes('pick') || s.includes('driver'));
+          });
+          if (!hasPickup) {
+            movement.push({
+              status: 'Pickup by Driver',
+              timestamp: now,
+              location: 'Khex Sorting Facility',
+              description: 'Package picked up by dispatch driver for immediate transit.'
+            });
+          }
+          fieldsToUpdate.movement = movement;
+        } else if (status === 'delivered') {
+          const originalReadyAt = order.readyAt || order.readyTime;
+          if (!originalReadyAt) {
+            const stdStr = formatDateToStandardString(now);
+            fieldsToUpdate.readyAt = stdStr;
+            fieldsToUpdate.readyTime = stdStr;
+          }
+          if (!order.pickedAt) {
+            fieldsToUpdate.pickedAt = formatDateToStandardString(now);
+          }
+          if (!order.deliveredAt) {
+            fieldsToUpdate.deliveredAt = formatDateToStandardString(now);
+          }
+          
+          let movement = [...(order.movement || [])];
+          // Ensure Ready
+          const hasReady = movement.some(m => (m.status || '').toLowerCase().includes('ready') || (m.status || '').toLowerCase().includes('prepare'));
+          if (!hasReady) {
+            movement.push({
+              status: 'Ready to Pickup',
+              timestamp: new Date(now.getTime() - 10 * 60 * 1000),
+              location: 'Khex Sorting Facility',
+              description: 'Package verified, processed, and ready for driver pickup.'
+            });
+          }
+          // Ensure Picked
+          const hasPickup = movement.some(m => {
+            const s = (m.status || '').toLowerCase();
+            return !s.includes('ready') && (s.includes('ship') || s.includes('transit') || s.includes('pick') || s.includes('driver'));
+          });
+          if (!hasPickup) {
+            movement.push({
+              status: 'Pickup by Driver',
+              timestamp: new Date(now.getTime() - 5 * 60 * 1000),
+              location: 'Khex Sorting Facility',
+              description: 'Package picked up by dispatch driver for immediate transit.'
+            });
+          }
+          // Ensure Delivered
+          const hasDel = movement.some(m => {
+            const s = (m.status || '').toLowerCase();
+            return s.includes('deliver') || s.includes('received');
+          });
+          if (!hasDel) {
+            movement.push({
+              status: 'Delivered',
+              timestamp: now,
+              location: shippingAddress.trim() || 'Customer Reception',
+              description: 'Package successfully delivered and received.'
+            });
+          }
+          fieldsToUpdate.movement = movement;
+        }
+
+        await updateDoc(orderRef, fieldsToUpdate);
       } catch (writeErr) {
         handleFirestoreError(writeErr, OperationType.WRITE, `orders/${order.id}`);
       }

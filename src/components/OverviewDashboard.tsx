@@ -73,6 +73,8 @@ function getResolvedMovement(order: Order): any[] {
 
   const resolvedMovement = [...(order.movement || [])];
   const createdTime = safeGetDate(order.orderDate);
+  const pickupDateVal = getPickupDate(order);
+  const deliveryDateVal = getDeliveryDate();
 
   // 1. Ensure "Order Placed" is present
   const hasOrderPlaced = resolvedMovement.some(m => {
@@ -95,34 +97,68 @@ function getResolvedMovement(order: Order): any[] {
   });
   const placementTime = orderPlacedStep ? safeGetDate(orderPlacedStep.timestamp) : createdTime;
 
-  // 2. Ensure "Picked up by Driver" or similar pickup step is present for shipped or delivered orders
+  const pickupTime = pickupDateVal && !isNaN(pickupDateVal.getTime())
+    ? pickupDateVal
+    : new Date(placementTime.getTime() + 1.5 * 3600 * 1000);
+
+  let readyTime: Date;
+  const readyDateVal = (order.readyAt && !isNaN(universalParseDate(order.readyAt)?.getTime()))
+    ? universalParseDate(order.readyAt)
+    : (order.readyTime && !isNaN(universalParseDate(order.readyTime)?.getTime()))
+      ? universalParseDate(order.readyTime)
+      : null;
+
+  if (readyDateVal) {
+    readyTime = readyDateVal;
+  } else if (pickupTime && pickupTime > placementTime && (order.status === 'shipped' || order.status === 'delivered')) {
+    readyTime = new Date(placementTime.getTime() + Math.max(60000, Math.floor((pickupTime.getTime() - placementTime.getTime()) / 2)));
+  } else {
+    readyTime = placementTime;
+  }
+
+  // 2. Ensure "Ready to Pickup" is present for ready, shipped, or delivered orders
+  const isReadyOrBeyond = order.status === 'ready' || order.status === 'shipped' || order.status === 'delivered' || !!order.readyTime || !!order.readyAt || !!order.pickedAt || (order.pickedItems && Object.keys(order.pickedItems).length > 0);
+  if (isReadyOrBeyond) {
+    const hasReady = resolvedMovement.some(m => {
+      const s = (m.status || '').toLowerCase();
+      return s.includes('ready') || s.includes('prepare');
+    });
+    if (!hasReady) {
+      resolvedMovement.push({
+        status: 'Ready to Pickup',
+        timestamp: readyTime,
+        location: 'Khex Sorting Facility',
+        description: 'Package verified, processed, and ready for driver pickup.'
+      } as any);
+    }
+  }
+
+  // 3. Ensure "Pickup by Driver" is present for shipped or delivered orders
   if (order.status === 'shipped' || order.status === 'delivered') {
     const hasPickup = resolvedMovement.some(m => {
       const s = (m.status || '').toLowerCase();
-      return s.includes('ship') || s.includes('transit') || s.includes('pick');
+      return !s.includes('ready') && (s.includes('ship') || s.includes('transit') || s.includes('pick') || s.includes('driver'));
     });
     if (!hasPickup) {
-      const shippedTime = new Date(placementTime.getTime() + 1.5 * 3600 * 1000);
       resolvedMovement.push({
-        status: 'Picked up by Driver',
-        timestamp: shippedTime,
+        status: 'Pickup by Driver',
+        timestamp: pickupTime,
         location: 'Khex Sorting Facility',
         description: 'Package picked up by dispatch driver for immediate transit.'
       } as any);
     }
   }
 
-  // 3. Ensure "Delivered" or similar delivery step is present for delivered orders
+  // 4. Ensure "Delivered" is present for delivered orders
   if (order.status === 'delivered') {
     const hasDelivery = resolvedMovement.some(m => {
       const s = (m.status || '').toLowerCase();
       return s.includes('deliver') || s.includes('received');
     });
     if (!hasDelivery) {
-      const deliveryDate = getDeliveryDate();
-      const deliveredTime = deliveryDate && !isNaN(deliveryDate.getTime())
-        ? deliveryDate
-        : new Date(placementTime.getTime() + 4 * 3600 * 1000);
+      const deliveredTime = deliveryDateVal && !isNaN(deliveryDateVal.getTime())
+        ? deliveryDateVal
+        : new Date(pickupTime.getTime() + 2 * 3600 * 1000);
 
       resolvedMovement.push({
         status: 'Delivered',
@@ -134,19 +170,15 @@ function getResolvedMovement(order: Order): any[] {
   }
 
   return resolvedMovement.slice().sort((a, b) => {
-    const dateA = safeGetDate(a.timestamp);
-    const dateB = safeGetDate(b.timestamp);
-    const diff = dateA.getTime() - dateB.getTime();
-    if (diff !== 0) return diff;
-    
-    const getPrec = (status: string) => {
+    const getStagePrec = (status: string) => {
       const s = (status || '').toLowerCase();
       if (s.includes('place') || s.includes('create')) return 1;
-      if (s.includes('pick') || s.includes('ship') || s.includes('transit')) return 2;
-      if (s.includes('deliver') || s.includes('receive')) return 3;
-      return 4;
+      if (s.includes('ready') || s.includes('prepare')) return 2;
+      if (s.includes('pick') || s.includes('ship') || s.includes('transit')) return 3;
+      if (s.includes('deliver') || s.includes('receive')) return 4;
+      return 5;
     };
-    return getPrec(a.status) - getPrec(b.status);
+    return getStagePrec(a.status) - getStagePrec(b.status);
   });
 }
 
@@ -563,8 +595,8 @@ export default function OverviewDashboard({
           <div>
             <h4 className="text-xs font-black uppercase tracking-[0.3em] text-black/40 mb-6">Status Distribution</h4>
           </div>
-          <div className="h-[250px] w-full flex items-center justify-center">
-            <ResponsiveContainer width="100%" height="100%">
+          <div className="h-[250px] w-full">
+            <ResponsiveContainer width="100%" height={250}>
               <PieChart>
                 <Pie
                   data={statusData}
@@ -649,7 +681,7 @@ export default function OverviewDashboard({
             </div>
           ) : (
             <div className="h-[250px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
+              <ResponsiveContainer width="100%" height={250}>
                 <BarChart data={unitsByMonthData}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                   <XAxis 
@@ -874,7 +906,7 @@ export default function OverviewDashboard({
             </div>
           ) : (
             <div className="h-[600px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
+              <ResponsiveContainer width="100%" height={600}>
                 <BarChart 
                   layout="vertical"
                   data={locationData}

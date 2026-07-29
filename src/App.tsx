@@ -21,7 +21,9 @@ import {
   query, 
   where, 
   onSnapshot,
-  orderBy 
+  orderBy,
+  doc,
+  updateDoc
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
 import { Order } from './types';
@@ -31,6 +33,16 @@ import { motion, AnimatePresence } from 'motion/react';
 import { getSanitizedMovement } from './lib/utils';
 
 import Logo from './components/Logo';
+
+const formatDateToStandardString = (date: Date): string => {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  const hh = String(date.getHours()).padStart(2, '0');
+  const min = String(date.getMinutes()).padStart(2, '0');
+  const ss = String(date.getSeconds()).padStart(2, '0');
+  return `${dd}/${mm}/${yyyy}, ${hh}:${min}:${ss}`;
+};
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -93,6 +105,72 @@ export default function App() {
         };
       }) as Order[];
       setOrders(ordersData);
+
+      // Perform background corrections to align pickedAt and readyTime based on status
+      snapshot.docs.forEach(async (docSnap) => {
+        const data = docSnap.data();
+        const docId = docSnap.id;
+        const status = (data.status || '').toLowerCase();
+
+        const hasPickedAt = data.pickedAt && typeof data.pickedAt === 'string' && data.pickedAt.trim() !== '';
+        const hasReadyTime = (data.readyTime && typeof data.readyTime === 'string' && data.readyTime.trim() !== '') || 
+                             (data.readyAt && typeof data.readyAt === 'string' && data.readyAt.trim() !== '');
+
+        // 1. Status is 'ready' or 'pickup':
+        //    'readyTime' / 'readyAt' should take the timestamp.
+        //    If 'pickedAt' is currently filled and 'readyTime' is empty (as written by Android app), 
+        //    migrate it and clear 'pickedAt'.
+        if ((status === 'ready' || status === 'pickup') && hasPickedAt && !hasReadyTime) {
+          try {
+            const orderRef = doc(db, 'orders', docId);
+            const val = data.pickedAt;
+            console.log(`[Corrector] Fixing Order ${docId}: Moving pickedAt "${val}" to readyTime and clearing pickedAt.`);
+            await updateDoc(orderRef, {
+              readyTime: val,
+              readyAt: val,
+              pickedAt: ''
+            });
+          } catch (e) {
+            console.error(`Failed to background correct order ${docId}:`, e);
+          }
+        }
+
+        // 2. Status is 'shipped':
+        //    'pickedAt' should be set to the date and time when the status is 'shipped'.
+        //    If 'pickedAt' is empty, we set it to the current time.
+        //    Also ensure readyTime has a fallback if it was left completely empty.
+        if (status === 'shipped') {
+          const needsPickedAtUpdate = !data.pickedAt || typeof data.pickedAt !== 'string' || data.pickedAt.trim() === '';
+          const needsReadyTimeUpdate = !hasReadyTime;
+
+          if (needsPickedAtUpdate || needsReadyTimeUpdate) {
+            try {
+              const orderRef = doc(db, 'orders', docId);
+              const updates: Record<string, any> = {};
+              const nowStr = formatDateToStandardString(new Date());
+
+              if (needsPickedAtUpdate) {
+                console.log(`[Corrector] Setting pickedAt to "${nowStr}" for shipped Order ${docId}.`);
+                updates.pickedAt = nowStr;
+              }
+
+              if (needsReadyTimeUpdate) {
+                let readyFallback = data.createdAt || data.orderDate || nowStr;
+                if (typeof readyFallback !== 'string') {
+                  readyFallback = nowStr;
+                }
+                console.log(`[Corrector] Setting readyTime/readyAt to "${readyFallback}" for shipped Order ${docId}.`);
+                updates.readyTime = readyFallback;
+                updates.readyAt = readyFallback;
+              }
+
+              await updateDoc(orderRef, updates);
+            } catch (e) {
+              console.error(`Failed to background correct shipped order ${docId}:`, e);
+            }
+          }
+        }
+      });
     }, (error: any) => {
       console.error("Firestore error:", error);
       if (error.message && error.message.includes("requires an index")) {

@@ -252,9 +252,32 @@ export default function Dashboard({ orders, user, onLogout }: DashboardProps) {
           : activeTab === 'pending'
             ? (order.status === 'pending' && !isPickupStatus(order))
             : (order.status === activeTab || (order.status || '').toLowerCase() === activeTab);
-      const matchesSearch = order.trackingNumber?.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                           order.items.some(i => i.name.toLowerCase().includes(searchQuery.toLowerCase())) ||
-                           order.shippingAddress?.toLowerCase().includes(searchQuery.toLowerCase());
+      const q = searchQuery.trim().toLowerCase();
+      let matchesSearch = true;
+      if (q) {
+        const cleanQuery = q.startsWith('#') ? q.slice(1) : q;
+        const idMatch = (order.id || '').toLowerCase().includes(cleanQuery) || `#${order.id || ''}`.toLowerCase().includes(q);
+        const numberMatch = (order.trackingNumber || '').toLowerCase().includes(q);
+        const itemMatch = (order.items || []).some(i => 
+          (i.name || '').toLowerCase().includes(q) || 
+          (i.serialNumbers || []).some(s => (s || '').toLowerCase().includes(q))
+        );
+        const locationMatch = (order.shippingAddress || '').toLowerCase().includes(q) ||
+                             (order.items || []).some(i => ((i as any).location || '').toLowerCase().includes(q));
+
+        const rawStatus = (order.status || '').toLowerCase();
+        let displayStatus = rawStatus;
+        if (rawStatus === 'delivered') displayStatus = 'delivered';
+        else if (rawStatus === 'shipped') displayStatus = 'pickup by driver shipped in transit';
+        else if (isPickupStatus(order)) displayStatus = 'ready to pickup pickup ready';
+        else if (rawStatus === 'pending') displayStatus = 'pending order placed created';
+
+        const statusMatch = rawStatus.includes(q) || 
+                           displayStatus.includes(q) ||
+                           (order.movement || []).some(m => (m.status || '').toLowerCase().includes(q));
+
+        matchesSearch = idMatch || numberMatch || itemMatch || locationMatch || statusMatch;
+      }
       return matchesTab && matchesSearch;
     })
     .sort((a, b) => {
@@ -471,7 +494,7 @@ export default function Dashboard({ orders, user, onLogout }: DashboardProps) {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-black/40" />
                 <input 
                   type="text" 
-                  placeholder="Search orders..."
+                  placeholder="Search ID, Order #, Item, Location, Status..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   autoFocus
@@ -843,7 +866,7 @@ export default function Dashboard({ orders, user, onLogout }: DashboardProps) {
                     <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-black/40" />
                     <input 
                       type="text" 
-                      placeholder="Search..."
+                      placeholder="Search ID, Order #, Item, Location, Status..."
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                       className="w-full bg-white border border-neutral-100 rounded-xl py-2.5 pl-10 pr-8 focus:border-neutral-400 text-xs font-semibold outline-none text-black placeholder:text-neutral-400 shadow-sm"

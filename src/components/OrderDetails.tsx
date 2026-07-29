@@ -133,6 +133,45 @@ export function getPickupDate(order: Order | undefined, strict = false): Date | 
   return null;
 }
 
+export function getReadyDate(order: Order | undefined, strict = false): Date | null {
+  if (!order) return null;
+  if (order.readyAt && (typeof order.readyAt !== 'string' || order.readyAt.trim() !== '')) {
+    const d = universalParseDate(order.readyAt);
+    if (d && !isNaN(d.getTime())) return d;
+  }
+  if (order.readyTime && (typeof order.readyTime !== 'string' || order.readyTime.trim() !== '')) {
+    const d = universalParseDate(order.readyTime);
+    if (d && !isNaN(d.getTime())) return d;
+  }
+  
+  if (order.movement && order.movement.length > 0) {
+    const readyStep = order.movement.find(m => {
+      const statusLower = (m.status || '').toLowerCase();
+      return statusLower.includes('ready') || statusLower.includes('prepare');
+    });
+    if (readyStep && readyStep.timestamp) {
+      const d = universalParseDate(readyStep.timestamp);
+      if (d && !isNaN(d.getTime())) return d;
+    }
+  }
+
+  if (strict) return null;
+
+  const isPending = (order.status || '').toLowerCase() === 'pending';
+  const isReadyOrBeyond = !isPending && (order.status === 'ready' || order.status === 'shipped' || order.status === 'delivered' || !!order.readyTime || !!order.readyAt || !!order.pickedAt || (order.pickedItems && Object.keys(order.pickedItems).length > 0));
+  if (isReadyOrBeyond) {
+    const placementTime = universalParseDate(order.orderDate) || new Date();
+    const pickupDateVal = getPickupDate(order, true);
+    if (pickupDateVal && pickupDateVal > placementTime) {
+      return new Date(placementTime.getTime() + Math.max(60000, Math.floor((pickupDateVal.getTime() - placementTime.getTime()) / 2)));
+    } else {
+      return placementTime;
+    }
+  }
+  
+  return null;
+}
+
 export function getDeliveryDate(order: Order | undefined, strict = false): Date | null {
   if (!order) return null;
   if (order.deliveredAt && (typeof order.deliveredAt !== 'string' || order.deliveredAt.trim() !== '')) {
@@ -445,6 +484,8 @@ export default function OrderDetails({ order, isOpen, onClose }: OrderDetailsPro
                   {(() => {
                     const resolvedMovement = [...(order.movement || [])];
                     const createdTime = safeGetDate(order.orderDate);
+                    const pickupDateVal = getPickupDate(order);
+                    const deliveryDateVal = getDeliveryDate(order);
 
                     // 1. Ensure "Order Placed" is present
                     const hasOrderPlaced = resolvedMovement.some(m => {
@@ -467,40 +508,69 @@ export default function OrderDetails({ order, isOpen, onClose }: OrderDetailsPro
                     });
                     const placementTime = orderPlacedStep ? safeGetDate(orderPlacedStep.timestamp) : createdTime;
 
-                    // 2. Ensure "Picked up by Driver" or similar pickup step is present for shipped or delivered orders
-                    if (order.status === 'shipped' || order.status === 'delivered') {
+                    const pickupTime = pickupDateVal && !isNaN(pickupDateVal.getTime())
+                      ? pickupDateVal
+                      : new Date(placementTime.getTime() + 1.5 * 3600 * 1000);
+
+                    let readyTime: Date;
+                    const readyDateVal = getReadyDate(order, true);
+                    if (readyDateVal && !isNaN(readyDateVal.getTime())) {
+                      readyTime = readyDateVal;
+                    } else if (pickupTime && pickupTime > placementTime && (order.status === 'shipped' || order.status === 'delivered')) {
+                      readyTime = new Date(placementTime.getTime() + Math.max(60000, Math.floor((pickupTime.getTime() - placementTime.getTime()) / 2)));
+                    } else {
+                      readyTime = placementTime;
+                    }
+
+                    // 2. Ensure "Ready to Pickup" is present for ready, shipped, or delivered orders
+                    const isPending = (order.status || '').toLowerCase() === 'pending';
+                    const isReadyOrBeyond = !isPending && (order.status === 'ready' || order.status === 'shipped' || order.status === 'delivered' || !!order.readyTime || !!order.readyAt || !!order.pickedAt || (order.pickedItems && Object.keys(order.pickedItems).length > 0));
+                    if (isReadyOrBeyond) {
+                      const readyStepIdx = resolvedMovement.findIndex(m => {
+                        const s = (m.status || '').toLowerCase();
+                        return s.includes('ready') || s.includes('prepare');
+                      });
+                      if (readyStepIdx === -1) {
+                        resolvedMovement.push({
+                          status: 'Ready to Pickup',
+                          timestamp: readyTime,
+                          location: 'Khex Sorting Facility',
+                          description: 'Package verified, processed, and ready for driver pickup.'
+                        } as any);
+                      } else if (readyDateVal) {
+                        resolvedMovement[readyStepIdx] = {
+                          ...resolvedMovement[readyStepIdx],
+                          timestamp: readyDateVal
+                        };
+                      }
+                    }
+
+                    // 3. Ensure "Pickup by Driver" is present for shipped or delivered orders
+                    if (!isPending && (order.status === 'shipped' || order.status === 'delivered')) {
                       const hasPickup = resolvedMovement.some(m => {
                         const s = (m.status || '').toLowerCase();
-                        return s.includes('ship') || s.includes('transit') || s.includes('pick');
+                        return !s.includes('ready') && (s.includes('ship') || s.includes('transit') || s.includes('pick') || s.includes('driver'));
                       });
                       if (!hasPickup) {
-                        const shippedTime = new Date(placementTime.getTime() + 1.5 * 3600 * 1000);
                         resolvedMovement.push({
-                          status: 'Picked up by Driver',
-                          timestamp: shippedTime,
+                          status: 'Pickup by Driver',
+                          timestamp: pickupTime,
                           location: 'Khex Sorting Facility',
                           description: 'Package picked up by dispatch driver for immediate transit.'
                         } as any);
                       }
                     }
 
-                    // 3. Ensure "Delivered" or similar delivery step is present for delivered orders
-                    if (order.status === 'delivered') {
+                    // 4. Ensure "Delivered" is present for delivered orders
+                    if (!isPending && order.status === 'delivered') {
                       const hasDelivery = resolvedMovement.some(m => {
                         const s = (m.status || '').toLowerCase();
                         return s.includes('deliver') || s.includes('received');
                       });
                       if (!hasDelivery) {
-                        let deliveredTimeStr = order.updatedAt;
-                        if (order.shippedItems && Object.keys(order.shippedItems).length > 0) {
-                          const firstItem = Object.values(order.shippedItems)[0];
-                          if (firstItem && firstItem.firstSeen) {
-                            deliveredTimeStr = firstItem.firstSeen as any;
-                          }
-                        }
-                        const deliveredTime = deliveryDate && !isNaN(deliveryDate.getTime())
-                          ? deliveryDate
-                          : (deliveredTimeStr ? safeGetDate(deliveredTimeStr) : new Date(placementTime.getTime() + 4 * 3600 * 1000));
+                        const deliveredTime = deliveryDateVal && !isNaN(deliveryDateVal.getTime())
+                          ? deliveryDateVal
+                          : new Date(pickupTime.getTime() + 2 * 3600 * 1000);
 
                         resolvedMovement.push({
                           status: 'Delivered',
@@ -511,27 +581,34 @@ export default function OrderDetails({ order, isOpen, onClose }: OrderDetailsPro
                       }
                     }
 
-                    return resolvedMovement.slice().sort((a, b) => {
-                      const dateA = safeGetDate(a.timestamp);
-                      const dateB = safeGetDate(b.timestamp);
-                      const diff = dateA.getTime() - dateB.getTime();
-                      if (diff !== 0) return diff;
-                      
-                      const getPrec = (status: string) => {
+                    let filteredSteps = resolvedMovement.slice();
+                    if (isPending) {
+                      filteredSteps = filteredSteps.filter(m => {
+                        const s = (m.status || '').toLowerCase();
+                        // Only keep "Order Placed" or "Processed" (non-ready, non-pickup, non-delivered)
+                        return !(s.includes('ready') || s.includes('prepare') || s.includes('pick') || s.includes('ship') || s.includes('transit') || s.includes('deliver') || s.includes('receive'));
+                      });
+                    }
+
+                    // Strictly sort by sequence: ORDER PLACED (1) -> READY TO PICKUP (2) -> PICKUP BY DRIVER (3) -> DELIVERED (4)
+                    return filteredSteps.sort((a, b) => {
+                      const getStagePrec = (status: string) => {
                         const s = (status || '').toLowerCase();
                         if (s.includes('place') || s.includes('create')) return 1;
-                        if (s.includes('pick') || s.includes('ship') || s.includes('transit')) return 2;
-                        if (s.includes('deliver') || s.includes('receive')) return 3;
-                        return 4;
+                        if (s.includes('ready') || s.includes('prepare')) return 2;
+                        if (s.includes('pick') || s.includes('ship') || s.includes('transit')) return 3;
+                        if (s.includes('deliver') || s.includes('receive')) return 4;
+                        return 5;
                       };
-                      return getPrec(a.status) - getPrec(b.status);
+                      return getStagePrec(a.status) - getStagePrec(b.status);
                     });
                   })().map((step, idx) => {
                     const stepDate = safeGetDate(step.timestamp);
                     const statusLower = step.status.toLowerCase();
                     const isCreated = statusLower.includes('place') || statusLower.includes('create');
-                    const isShipped = statusLower.includes('ship') || statusLower.includes('transit') || statusLower.includes('pick');
-                    const isDelivered = statusLower.includes('deliver');
+                    const isReady = statusLower.includes('ready') || statusLower.includes('prepare');
+                    const isShipped = !isReady && (statusLower.includes('ship') || statusLower.includes('transit') || statusLower.includes('pick') || statusLower.includes('driver'));
+                    const isDelivered = statusLower.includes('deliver') || statusLower.includes('receive');
                     
                     const driverName = getDriverName(order);
                     const deliveredByVal = getDeliveredBy(order);
@@ -539,8 +616,16 @@ export default function OrderDetails({ order, isOpen, onClose }: OrderDetailsPro
                     const pickupTimeDate = getPickupDate(order) || stepDate;
                     const receivedTimeDate = getDeliveryDate(order) || stepDate;
 
+                    let displayTitle = step.status;
+                    if (isCreated) displayTitle = 'ORDER PLACED';
+                    else if (isReady) displayTitle = 'READY TO PICKUP';
+                    else if (isShipped) displayTitle = 'PICKUP BY DRIVER';
+                    else if (isDelivered) displayTitle = 'DELIVERED';
+
                     let headerDate = stepDate;
-                    if (isShipped) {
+                    if (isCreated) {
+                      headerDate = safeGetDate(order.orderDate);
+                    } else if (isShipped) {
                       headerDate = pickupTimeDate;
                     } else if (isDelivered) {
                       headerDate = receivedTimeDate;
@@ -556,6 +641,11 @@ export default function OrderDetails({ order, isOpen, onClose }: OrderDetailsPro
                       stepBg = 'bg-[#FF9800]';
                       stepBorder = 'border-[#FF9800]/20';
                       StepIcon = Package;
+                    } else if (isReady) {
+                      stepColor = 'text-[#8b5cf6]';
+                      stepBg = 'bg-[#8b5cf6]';
+                      stepBorder = 'border-[#8b5cf6]/20';
+                      StepIcon = Clock;
                     } else if (isShipped) {
                       stepColor = 'text-[#3b82f6]';
                       stepBg = 'bg-[#3b82f6]';
@@ -585,7 +675,7 @@ export default function OrderDetails({ order, isOpen, onClose }: OrderDetailsPro
                         )}>
                           <div className="flex justify-between items-start mb-2">
                             <h5 className={cn("font-black text-[11px] uppercase tracking-[0.2em]", stepColor)}>
-                              {step.status}
+                              {displayTitle}
                             </h5>
                             <p className="text-[10px] font-mono text-black/35 font-bold uppercase">
                               {format(headerDate, 'dd/MM/yyyy • HH:mm')}
@@ -596,7 +686,7 @@ export default function OrderDetails({ order, isOpen, onClose }: OrderDetailsPro
                             {step.description}
                           </p>
 
-                          {/* Detail blocks as requested by user */}
+                          {/* Detail blocks */}
                           {isCreated && (
                             <div className="mb-3 bg-zinc-50/55 border border-zinc-100 rounded-xl p-3 space-y-1.5 animate-fadeIn">
                               <div className="flex justify-between text-[11px]">
@@ -606,6 +696,19 @@ export default function OrderDetails({ order, isOpen, onClose }: OrderDetailsPro
                               <div className="flex justify-between text-[11px]">
                                 <span className="text-black/45 uppercase font-black tracking-wider">Creation Time</span>
                                 <span className="font-mono text-black/80 font-bold">{format(stepDate, 'HH:mm:ss')}</span>
+                              </div>
+                            </div>
+                          )}
+
+                          {isReady && (
+                            <div className="mb-3 bg-purple-50/40 border border-purple-100/60 rounded-xl p-3 space-y-1.5 animate-fadeIn">
+                              <div className="flex justify-between text-[11px] items-center">
+                                <span className="text-[#8b5cf6] uppercase font-black tracking-wider">Status</span>
+                                <span className="px-2 py-0.5 bg-purple-100 text-purple-800 text-[9px] font-black uppercase rounded-md tracking-wider">READY FOR PICKUP</span>
+                              </div>
+                              <div className="flex justify-between text-[11px] items-center">
+                                <span className="text-[#8b5cf6] uppercase font-black tracking-wider">Ready Time</span>
+                                <span className="font-mono text-purple-900 font-bold">{format(stepDate, 'HH:mm • dd/MM/yyyy')}</span>
                               </div>
                             </div>
                           )}
