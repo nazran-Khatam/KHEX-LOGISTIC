@@ -3,7 +3,7 @@ import { User } from 'firebase/auth';
 import { doc, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Order, OrderStatus } from '../types';
-import { LayoutDashboard, Package, Truck, CheckCircle2, LogOut, Search, MapPin, Plus, Edit2, Trash2, AlertOctagon, X, FileSpreadsheet, Calendar, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
+import { LayoutDashboard, Package, Truck, CheckCircle2, LogOut, Search, MapPin, Plus, Edit2, Trash2, AlertOctagon, X, FileSpreadsheet, Calendar, ChevronDown, ChevronLeft, ChevronRight, PackageCheck, Menu } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 import OrderCard from './OrderCard';
@@ -21,13 +21,15 @@ interface DashboardProps {
 }
 
 export default function Dashboard({ orders, user, onLogout }: DashboardProps) {
-  const [activeTab, setActiveTab] = useState<OrderStatus | 'all' | 'create' | 'report'>('all');
+  const [activeTab, setActiveTab] = useState<OrderStatus | 'all' | 'create' | 'report' | 'pickup'>('all');
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [longPressedOrder, setLongPressedOrder] = useState<Order | null>(null);
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
 
   // Date Filtering / Picker States & Helpers lifted from OverviewDashboard
   const [dateRangeType, setDateRangeType] = useState<'all' | 'today' | '7days' | '30days' | 'custom'>('all');
@@ -161,13 +163,24 @@ export default function Dashboard({ orders, user, onLogout }: DashboardProps) {
     }
   };
 
+  const isPickupStatus = (order: Order) => {
+    if (!order) return false;
+    const s = (order.status || '').toLowerCase();
+    if (s === 'pickup' || s === 'ready') return true;
+    if (s === 'pending' && (!!order.pickedAt || (order.movement && order.movement.some(m => (m.status || '').toLowerCase().includes('pick'))))) return true;
+    return false;
+  };
+
   const getOrderTimestamp = (order: Order): Date => {
     const safeGetDate = (date: any): Date | null => {
       return universalParseDate(date);
     };
 
     const statusMatch = (order.status || 'pending').toLowerCase();
-    if (statusMatch === 'pending') {
+    if (statusMatch === 'pickup' || statusMatch === 'ready' || isPickupStatus(order)) {
+      const d = getPickupDate(order) || safeGetDate(order.orderDate);
+      if (d) return d;
+    } else if (statusMatch === 'pending') {
       const d = safeGetDate(order.orderDate);
       if (d) return d;
     } else if (statusMatch === 'shipped') {
@@ -232,7 +245,13 @@ export default function Dashboard({ orders, user, onLogout }: DashboardProps) {
 
   const filteredOrders = dateFilteredOrders
     .filter(order => {
-      const matchesTab = activeTab === 'all' || order.status === activeTab;
+      const matchesTab = activeTab === 'all' 
+        ? true 
+        : activeTab === 'pickup' 
+          ? isPickupStatus(order)
+          : activeTab === 'pending'
+            ? (order.status === 'pending' && !isPickupStatus(order))
+            : (order.status === activeTab || (order.status || '').toLowerCase() === activeTab);
       const matchesSearch = order.trackingNumber?.toLowerCase().includes(searchQuery.toLowerCase()) || 
                            order.items.some(i => i.name.toLowerCase().includes(searchQuery.toLowerCase())) ||
                            order.shippingAddress?.toLowerCase().includes(searchQuery.toLowerCase());
@@ -248,15 +267,16 @@ export default function Dashboard({ orders, user, onLogout }: DashboardProps) {
 
   const stats = {
     all: dateFilteredOrders.length,
-    pending: dateFilteredOrders.filter(o => o.status === 'pending').length,
+    pending: dateFilteredOrders.filter(o => o.status === 'pending' && !isPickupStatus(o)).length,
+    pickup: dateFilteredOrders.filter(o => isPickupStatus(o)).length,
     shipped: dateFilteredOrders.filter(o => o.status === 'shipped').length,
     delivered: dateFilteredOrders.filter(o => o.status === 'delivered').length,
   };
 
   return (
     <div className="flex h-screen overflow-hidden bg-[#dbdbdb]">
-      {/* Sidebar */}
-      <aside className="w-72 bg-black border-r border-black/5 flex flex-col p-8 shrink-0 relative z-20">
+      {/* Desktop Sidebar */}
+      <aside className="hidden md:flex w-72 bg-black border-r border-black/5 flex-col p-8 shrink-0 relative z-20">
         <div className="mb-12 flex justify-center">
           <Logo light />
         </div>
@@ -282,6 +302,13 @@ export default function Dashboard({ orders, user, onLogout }: DashboardProps) {
             icon={<Package className="w-4 h-4" />}
             label="Orders"
             count={stats.pending}
+          />
+          <NavItem 
+            active={activeTab === 'pickup'} 
+            onClick={() => setActiveTab('pickup')}
+            icon={<PackageCheck className="w-4 h-4" />}
+            label="Pickup"
+            count={stats.pickup}
           />
           <NavItem 
             active={activeTab === 'shipped'} 
@@ -328,292 +355,758 @@ export default function Dashboard({ orders, user, onLogout }: DashboardProps) {
         </div>
       </aside>
 
+      {/* Mobile Sidebar Drawer */}
+      <AnimatePresence>
+        {isMobileMenuOpen && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsMobileMenuOpen(false)}
+              className="fixed inset-0 bg-black/70 z-50 md:hidden backdrop-blur-sm"
+            />
+            <motion.aside
+              initial={{ x: '-100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '-100%' }}
+              transition={{ type: 'spring', damping: 25, stiffness: 220 }}
+              className="fixed inset-y-0 left-0 w-72 bg-black z-50 p-6 flex flex-col justify-between md:hidden shadow-2xl border-r border-white/10 overflow-y-auto max-h-screen custom-scrollbar"
+            >
+              <div>
+                <div className="flex items-center justify-between mb-8 pb-4 border-b border-white/10">
+                  <Logo light />
+                  <button 
+                    onClick={() => setIsMobileMenuOpen(false)}
+                    className="p-2 rounded-xl bg-white/10 text-white hover:bg-white/20 transition-colors"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <nav className="space-y-1">
+                  <NavItem 
+                    active={activeTab === 'all'} 
+                    onClick={() => { setActiveTab('all'); setIsMobileMenuOpen(false); }}
+                    icon={<LayoutDashboard className="w-4 h-4" />}
+                    label="Overview"
+                    count={0}
+                  />
+                  <NavItem 
+                    active={activeTab === 'create'} 
+                    onClick={() => { setActiveTab('create'); setIsMobileMenuOpen(false); }}
+                    icon={<Plus className="w-4 h-4" />}
+                    label="Create"
+                    count={0}
+                  />
+                  <NavItem 
+                    active={activeTab === 'pending'} 
+                    onClick={() => { setActiveTab('pending'); setIsMobileMenuOpen(false); }}
+                    icon={<Package className="w-4 h-4" />}
+                    label="Orders"
+                    count={stats.pending}
+                  />
+                  <NavItem 
+                    active={activeTab === 'pickup'} 
+                    onClick={() => { setActiveTab('pickup'); setIsMobileMenuOpen(false); }}
+                    icon={<PackageCheck className="w-4 h-4" />}
+                    label="Pickup"
+                    count={stats.pickup}
+                  />
+                  <NavItem 
+                    active={activeTab === 'shipped'} 
+                    onClick={() => { setActiveTab('shipped'); setIsMobileMenuOpen(false); }}
+                    icon={<Truck className="w-4 h-4" />}
+                    label="Shipped"
+                    count={stats.shipped}
+                  />
+                  <NavItem 
+                    active={activeTab === 'delivered'} 
+                    onClick={() => { setActiveTab('delivered'); setIsMobileMenuOpen(false); }}
+                    icon={<CheckCircle2 className="w-4 h-4" />}
+                    label="Delivered"
+                    count={stats.delivered}
+                  />
+                  <NavItem 
+                    active={activeTab === 'report'} 
+                    onClick={() => { setActiveTab('report'); setIsMobileMenuOpen(false); }}
+                    icon={<FileSpreadsheet className="w-4 h-4" />}
+                    label="Reports"
+                    count={0}
+                  />
+                </nav>
+              </div>
+
+              <div className="pt-6 border-t border-white/10 space-y-6">
+                <div className="flex items-center gap-3">
+                  <img 
+                    src={user.photoURL || `https://ui-avatars.com/api/?name=${user.displayName}`} 
+                    alt={user.displayName || ''} 
+                    className="w-8 h-8 rounded grayscale border border-white/10"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[10px] font-bold text-white uppercase tracking-widest truncate">{user.displayName}</p>
+                    <p className="text-[9px] text-white/20 uppercase tracking-tighter truncate">Verified Node</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={onLogout}
+                  className="w-full flex items-center gap-3 text-white/40 hover:text-white transition-colors text-[9px] uppercase font-bold tracking-[0.2em]"
+                >
+                  <LogOut className="w-3 h-3" />
+                  Logout
+                </button>
+              </div>
+            </motion.aside>
+          </>
+        )}
+      </AnimatePresence>
+
       {/* Main Content */}
       <main className="flex-1 flex flex-col overflow-hidden bg-[#dbdbdb]">
-        <header className="h-28 border-b border-black/10 flex items-center justify-between px-12 shrink-0 bg-[#FFA000] sticky top-0 z-50 shadow-lg">
-          <div className="flex items-center gap-12">
-            <h2 className="text-2xl font-sans font-bold text-black capitalize tracking-tight flex-shrink-0">
-              {activeTab === 'all' ? 'Dashboard' : activeTab === 'create' ? 'Create Order' : activeTab === 'report' ? 'Logistics Reports' : activeTab.replace('-', ' ')}
-            </h2>
-            
-            {/* Custom Premium Stats Card with Cream Background */}
-            <div className="bg-[#FAF6F0] px-6 py-2.5 rounded-[18px] flex items-center gap-6 shadow-md border border-neutral-100 flex-shrink-0">
-              <div className="text-center px-1">
-                <p className="text-[10px] font-bold text-[#8B7E6F] tracking-widest uppercase mb-1">ORDERS</p>
-                <p className="text-xl font-bold font-sans text-black leading-none">{stats.all}</p>
-              </div>
-              <div className="w-px h-8 bg-black/10"></div>
-              <div className="text-center px-1">
-                <p className="text-[10px] font-bold text-[#8B7E6F] tracking-widest uppercase mb-1">PENDING</p>
-                <p className="text-xl font-bold font-sans text-black leading-none">{stats.pending}</p>
-              </div>
-              <div className="w-px h-8 bg-black/10"></div>
-              <div className="text-center px-1">
-                <p className="text-[10px] font-bold text-[#8B7E6F] tracking-widest uppercase mb-1">DELIVERED</p>
-                <p className="text-xl font-bold font-sans text-black leading-none">{stats.delivered}</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-4">
-            <div className="relative w-48 transition-all">
-              <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-black/40" />
-              <input 
-                type="text" 
-                placeholder="Search..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full bg-white border border-neutral-100 rounded-xl py-3 pl-10 pr-3 focus:border-neutral-400 text-xs font-semibold outline-none text-black placeholder:text-neutral-400 shadow-sm"
-              />
-            </div>
-
-            {/* Central Date Range Selector & Picker */}
-            {(activeTab === 'all' || activeTab === 'pending' || activeTab === 'shipped' || activeTab === 'delivered' || activeTab === 'report') && (
-              <div className="relative header-datepicker-container flex items-center">
-                <button
-                  type="button"
-                  onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                  className="bg-white border border-neutral-100 rounded-xl py-3 pl-11 pr-10 hover:border-neutral-200 transition-all text-xs font-sans font-bold text-black outline-none shadow-sm cursor-pointer flex items-center gap-1 min-w-[140px] text-left relative"
-                >
-                  <Calendar className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-black/40" />
-                  <span className="truncate">
-                    {dateRangeType === 'all' && 'All Time'}
-                    {dateRangeType === 'today' && 'Today'}
-                    {dateRangeType === '7days' && 'Last 7 Days'}
-                    {dateRangeType === '30days' && 'Last 30 Days'}
-                    {dateRangeType === 'custom' && (
-                      customStartDate 
-                        ? `${formatDatePickerLabel(customStartDate)}${customEndDate ? ` - ${formatDatePickerLabel(customEndDate)}` : ' - ...'}`
-                        : 'Custom Range'
-                    )}
-                  </span>
-                  <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-black/40" />
-                </button>
-
-                {isDropdownOpen && (
-                  <div className="absolute right-0 top-full mt-2 z-50 bg-white border border-black/15 shadow-xl rounded-2xl w-48 py-2 text-black animate-fade-in">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDateRangeType('all');
-                        setIsDropdownOpen(false);
-                      }}
-                      className={`w-full px-4 py-2.5 text-left text-xs font-bold hover:bg-black/[0.02] transition-colors ${dateRangeType === 'all' ? 'text-black bg-black/[0.03]' : 'text-neutral-700'}`}
-                    >
-                      All Time
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDateRangeType('today');
-                        setIsDropdownOpen(false);
-                      }}
-                      className={`w-full px-4 py-2.5 text-left text-xs font-bold hover:bg-black/[0.02] transition-colors ${dateRangeType === 'today' ? 'text-black bg-black/[0.03]' : 'text-neutral-700'}`}
-                    >
-                      Today
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDateRangeType('7days');
-                        setIsDropdownOpen(false);
-                      }}
-                      className={`w-full px-4 py-2.5 text-left text-xs font-bold hover:bg-black/[0.02] transition-colors ${dateRangeType === '7days' ? 'text-black bg-black/[0.03]' : 'text-neutral-700'}`}
-                    >
-                      Last 7 Days
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDateRangeType('30days');
-                        setIsDropdownOpen(false);
-                      }}
-                      className={`w-full px-4 py-2.5 text-left text-xs font-bold hover:bg-black/[0.02] transition-colors ${dateRangeType === '30days' ? 'text-black bg-black/[0.03]' : 'text-neutral-700'}`}
-                    >
-                      Last 30 Days
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDateRangeType('custom');
-                        setIsDatePickerOpen(true);
-                        setIsDropdownOpen(false);
-                      }}
-                      className={`w-full px-4 py-2.5 text-left text-xs font-bold hover:bg-black/[0.02] transition-colors ${dateRangeType === 'custom' ? 'text-black bg-black/[0.03]' : 'text-neutral-700'}`}
-                    >
-                      Custom Range...
-                    </button>
-                  </div>
+        <header className="border-b border-black/10 p-2.5 sm:p-3.5 md:p-4 md:px-12 shrink-0 bg-[#FFA000] sticky top-0 z-40 shadow-md">
+          {isSearchOpen ? (
+            <div className="flex items-center gap-2 w-full animate-fade-in py-0.5">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-black/40" />
+                <input 
+                  type="text" 
+                  placeholder="Search orders..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  autoFocus
+                  className="w-full bg-white border border-neutral-100 rounded-xl py-2 pl-9 pr-8 focus:border-neutral-400 text-xs font-semibold outline-none text-black placeholder:text-neutral-400 shadow-sm"
+                />
+                {searchQuery && (
+                  <button 
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-black/40 hover:text-black p-1"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
                 )}
+              </div>
+              <button
+                onClick={() => {
+                  setIsSearchOpen(false);
+                  setSearchQuery('');
+                }}
+                className="px-3 py-2 rounded-xl bg-black/10 hover:bg-black/20 text-black text-xs font-bold transition-colors shrink-0"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <>
+              {/* ==================== MOBILE & TABLET HEADER LAYOUT (< md) ==================== */}
+              <div className="flex md:hidden flex-col gap-2.5 w-full">
+                {/* Mobile Row 1: Title + Search Icon Button */}
+                <div className="flex items-center justify-between w-full">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <button 
+                      onClick={() => setIsMobileMenuOpen(true)}
+                      className="p-1.5 rounded-xl bg-black/10 hover:bg-black/20 text-black transition-colors shrink-0"
+                      aria-label="Toggle navigation menu"
+                    >
+                      <Menu className="w-5 h-5" />
+                    </button>
+                    <h2 className="text-lg font-sans font-bold text-black capitalize tracking-tight truncate">
+                      {activeTab === 'all' ? 'Dashboard' : activeTab === 'create' ? 'Create Order' : activeTab === 'report' ? 'Logistics Reports' : activeTab === 'pickup' ? 'Pickup' : activeTab.replace('-', ' ')}
+                    </h2>
+                  </div>
 
-                {dateRangeType === 'custom' && isDatePickerOpen && (
-                  <div className="absolute right-0 top-full mt-2 z-50 bg-white border border-black/10 rounded-2xl p-4 shadow-xl w-[265px] text-black">
-                    {showMonthYearPicker ? (
-                      <div className="py-1">
-                        <div className="flex justify-between items-center px-1 mb-3 border-b border-black/5 pb-2">
-                          <button 
-                            type="button"
-                            onClick={() => setViewYear(prev => prev - 1)}
-                            className="text-xs font-bold text-black/50 hover:text-black p-1 bg-black/[0.02] hover:bg-black/5 rounded"
-                          >
-                            &larr;
-                          </button>
-                          <span className="text-xs font-black text-black tracking-wider">{viewYear}</span>
-                          <button 
-                            type="button"
-                            onClick={() => setViewYear(prev => prev + 1)}
-                            className="text-xs font-bold text-black/50 hover:text-black p-1 bg-black/[0.02] hover:bg-black/5 rounded"
-                          >
-                            &rarr;
-                          </button>
-                        </div>
-                        
-                        <div className="grid grid-cols-3 gap-1.5 text-center text-xs font-bold">
-                          {monthNames.map((name, mIdx) => (
-                            <button
-                              key={name}
-                              type="button"
-                              onClick={() => {
-                                setViewMonth(mIdx);
-                                setShowMonthYearPicker(false);
-                              }}
-                              className={`py-2 rounded-xl transition-all ${
-                                viewMonth === mIdx 
-                                  ? 'bg-black text-white' 
-                                  : 'bg-black/[0.02] text-black hover:bg-black/5'
-                              }`}
-                            >
-                              {name}
-                            </button>
-                          ))}
-                        </div>
+                  {/* Search Icon Button */}
+                  {activeTab !== 'create' && (
+                    <button
+                      onClick={() => setIsSearchOpen(true)}
+                      className={cn(
+                        "w-9 h-9 rounded-xl bg-white border border-neutral-100 hover:bg-neutral-50 text-black shadow-sm transition-all flex items-center justify-center shrink-0 relative",
+                        searchQuery && "bg-black text-white border-black"
+                      )}
+                      aria-label="Search"
+                      title="Search orders"
+                    >
+                      <Search className="w-4 h-4" />
+                      {searchQuery && (
+                        <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-[#FF9800] rounded-full border-2 border-white" />
+                      )}
+                    </button>
+                  )}
+                </div>
+
+                {/* Mobile Row 2: Stats Summary Pill + Date Filter Picker */}
+                {activeTab !== 'create' && (
+                  <div className="flex items-center justify-between w-full gap-1.5 sm:gap-2 min-w-0 overflow-hidden">
+                    {/* Custom Mobile Stats Card */}
+                    <div className="bg-[#FAF6F0] px-1.5 xs:px-2.5 sm:px-4 py-1.5 sm:py-2.5 rounded-[16px] sm:rounded-[18px] flex items-center gap-1.5 xs:gap-2 sm:gap-3.5 shadow-sm border border-neutral-100 flex-1 min-w-0 justify-around">
+                      <div className="text-center shrink-0">
+                        <p className="text-[7.5px] xs:text-[8.5px] sm:text-[10.5px] font-bold text-[#8B7E6F] tracking-wider uppercase mb-0.5 sm:mb-1">ORDERS</p>
+                        <p className="text-sm sm:text-lg font-black font-sans text-black leading-none">{stats.all}</p>
                       </div>
-                    ) : (
-                      <div>
-                        <div className="flex items-center justify-between mb-4">
-                          <button
-                            type="button"
-                            onClick={() => setShowMonthYearPicker(true)}
-                            className="flex items-center gap-1 text-xs font-black uppercase text-neutral-800 hover:bg-black/5 px-2 py-1 rounded-lg transition-colors cursor-pointer text-left"
-                          >
-                            <span>{monthNames[viewMonth]} {viewYear}</span>
-                            <span className="text-[8px] text-neutral-400">▼</span>
-                          </button>
+                      <div className="w-px h-5 sm:h-7 bg-black/10 shrink-0"></div>
+                      <div className="text-center shrink-0">
+                        <p className="text-[7.5px] xs:text-[8.5px] sm:text-[10.5px] font-bold text-[#8B7E6F] tracking-wider uppercase mb-0.5 sm:mb-1">PENDING</p>
+                        <p className="text-sm sm:text-lg font-black font-sans text-black leading-none">{stats.pending}</p>
+                      </div>
+                      <div className="w-px h-5 sm:h-7 bg-black/10 shrink-0"></div>
+                      <div className="text-center shrink-0">
+                        <p className="text-[7.5px] xs:text-[8.5px] sm:text-[10.5px] font-bold text-[#8B7E6F] tracking-wider uppercase mb-0.5 sm:mb-1">PICKUP</p>
+                        <p className="text-sm sm:text-lg font-black font-sans text-black leading-none">{stats.pickup}</p>
+                      </div>
+                      <div className="w-px h-5 sm:h-7 bg-black/10 shrink-0"></div>
+                      <div className="text-center shrink-0">
+                        <p className="text-[7.5px] xs:text-[8.5px] sm:text-[10.5px] font-bold text-[#8B7E6F] tracking-wider uppercase mb-0.5 sm:mb-1">DELIVERED</p>
+                        <p className="text-sm sm:text-lg font-black font-sans text-black leading-none">{stats.delivered}</p>
+                      </div>
+                    </div>
 
-                          <div className="flex items-center gap-3">
-                            <button
-                              type="button"
-                              onClick={prevMonth}
-                              className="text-neutral-500 hover:text-neutral-800 hover:bg-black/5 p-1 rounded-full text-sm font-bold transition-all w-6 h-6 flex items-center justify-center cursor-pointer"
-                            >
-                              <ChevronLeft className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={nextMonth}
-                              className="text-neutral-500 hover:text-neutral-800 hover:bg-black/5 p-1 rounded-full text-sm font-bold transition-all w-6 h-6 flex items-center justify-center cursor-pointer"
-                            >
-                              <ChevronRight className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </div>
+                  {/* Date Range Selector for Mobile */}
+                  {(activeTab === 'all' || activeTab === 'pending' || activeTab === 'pickup' || activeTab === 'shipped' || activeTab === 'delivered' || activeTab === 'report') && (
+                    <div className="relative header-datepicker-container flex items-center shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                        className="bg-white border border-neutral-100 rounded-[16px] sm:rounded-[18px] py-1.5 sm:py-2.5 px-2 xs:px-2.5 sm:px-3.5 hover:border-neutral-200 transition-all text-[11px] sm:text-xs font-sans font-bold text-black outline-none shadow-sm cursor-pointer flex items-center gap-1 sm:gap-1.5 text-left relative shrink-0"
+                      >
+                        <Calendar className="w-3.5 h-3.5 text-black/40 shrink-0" />
+                        <span className="truncate">
+                          {dateRangeType === 'all' && 'All Time'}
+                          {dateRangeType === 'today' && 'Today'}
+                          {dateRangeType === '7days' && 'Last 7 Days'}
+                          {dateRangeType === '30days' && 'Last 30 Days'}
+                          {dateRangeType === 'custom' && (
+                            customStartDate 
+                              ? `${formatDatePickerLabel(customStartDate)}${customEndDate ? ` - ${formatDatePickerLabel(customEndDate)}` : ' - ...'}`
+                              : 'Custom'
+                          )}
+                        </span>
+                        <ChevronDown className="w-3.5 h-3.5 text-black/40 shrink-0" />
+                      </button>
 
-                        <div className="grid grid-cols-7 gap-y-1 gap-x-1 text-center text-[10px] font-bold text-black/35 tracking-wider mb-1.5">
-                          {weekdays.map((day, i) => (
-                            <div key={i}>{day}</div>
-                          ))}
-                        </div>
-
-                        <div className="border-b border-black/[0.06] mb-2" />
-
-                        <div className="text-[10px] font-black uppercase tracking-widest text-[#94a3b8] mb-1.5 px-0.5 text-left">
-                          {monthNames[viewMonth]}
-                        </div>
-
-                        <div className="grid grid-cols-7 gap-y-1 gap-x-1 justify-items-center text-center">
-                          {(() => {
-                            const year = viewYear;
-                            const month = viewMonth;
-                            const total = getDaysInMonth(year, month);
-                            const startOffset = getDayOfWeekOffset(year, month);
-                            const cells = [];
-                            
-                            for (let b = 0; b < startOffset; b++) {
-                              cells.push(<div key={`blank-${b}`} className="w-8 h-8" />);
-                            }
-                            
-                            for (let d = 1; d <= total; d++) {
-                              const dateStr = makeDateStr(year, month, d);
-                              const isStart = isSelectedStart(dateStr);
-                              const isEnd = isSelectedEnd(dateStr);
-                              const isDateBetweenVal = isDateBetween(dateStr);
-                              
-                              cells.push(
-                                <div key={`day-${d}`} className="relative w-full h-8 flex items-center justify-center">
-                                  {isDateBetweenVal && (
-                                    <div className="absolute inset-y-1.5 left-0 right-0 bg-[#edf5ff]/80" />
-                                  )}
-                                  {isStart && (customEndDate || hoveredDateStr) && (
-                                    <div className="absolute inset-y-1.5 left-1/2 right-0 bg-[#edf5ff]/80" />
-                                  )}
-                                  {isEnd && (
-                                    <div className="absolute inset-y-1.5 left-0 right-1/2 bg-[#edf5ff]/80" />
-                                  )}
-
-                                  <button
-                                    type="button"
-                                    onClick={() => handleDateClick(dateStr)}
-                                    onMouseEnter={() => setHoveredDateStr(dateStr)}
-                                    onMouseLeave={() => setHoveredDateStr(null)}
-                                    className={`relative z-10 w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all ${
-                                      isStart
-                                        ? 'border border-black bg-white text-black shadow-sm'
-                                        : isEnd
-                                          ? 'bg-[#edf5ff] border border-blue-200 text-[#2c6ec4] shadow-sm'
-                                          : isDateBetweenVal
-                                            ? 'text-[#2c6ec4] bg-transparent hover:bg-blue-100/30'
-                                            : 'text-neutral-700 hover:bg-black/5 font-medium'
-                                    }`}
-                                  >
-                                    {d}
-                                  </button>
-                                </div>
-                              );
-                            }
-                            
-                            return cells;
-                          })()}
-                        </div>
-
-                        {/* Reset button at bottom of Custom Range picker */}
-                        <div className="mt-4 pt-3 border-t border-neutral-100 flex items-center justify-between">
-                          <span className="text-[9px] text-[#8B7E6F] font-black uppercase tracking-wider">
-                            {customStartDate ? 'Range Active' : 'Select Dates'}
-                          </span>
+                      {isDropdownOpen && (
+                        <div className="absolute right-0 top-full mt-2 z-50 bg-white border border-black/15 shadow-xl rounded-2xl w-48 py-2 text-black animate-fade-in">
                           <button
                             type="button"
                             onClick={() => {
-                              setCustomStartDate('');
-                              setCustomEndDate('');
-                              setHoveredDateStr(null);
                               setDateRangeType('all');
-                              setIsDatePickerOpen(false);
+                              setIsDropdownOpen(false);
                             }}
-                            className="bg-neutral-100 hover:bg-neutral-200 text-neutral-800 hover:text-neutral-900 border border-neutral-200/50 text-[10px] font-black uppercase tracking-wider px-3 py-1.5 rounded-lg transition-all cursor-pointer shadow-sm"
+                            className={`w-full px-4 py-2.5 text-left text-xs font-bold hover:bg-black/[0.02] transition-colors ${dateRangeType === 'all' ? 'text-black bg-black/[0.03]' : 'text-neutral-700'}`}
                           >
-                            Reset
+                            All Time
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDateRangeType('today');
+                              setIsDropdownOpen(false);
+                            }}
+                            className={`w-full px-4 py-2.5 text-left text-xs font-bold hover:bg-black/[0.02] transition-colors ${dateRangeType === 'today' ? 'text-black bg-black/[0.03]' : 'text-neutral-700'}`}
+                          >
+                            Today
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDateRangeType('7days');
+                              setIsDropdownOpen(false);
+                            }}
+                            className={`w-full px-4 py-2.5 text-left text-xs font-bold hover:bg-black/[0.02] transition-colors ${dateRangeType === '7days' ? 'text-black bg-black/[0.03]' : 'text-neutral-700'}`}
+                          >
+                            Last 7 Days
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDateRangeType('30days');
+                              setIsDropdownOpen(false);
+                            }}
+                            className={`w-full px-4 py-2.5 text-left text-xs font-bold hover:bg-black/[0.02] transition-colors ${dateRangeType === '30days' ? 'text-black bg-black/[0.03]' : 'text-neutral-700'}`}
+                          >
+                            Last 30 Days
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDateRangeType('custom');
+                              setIsDatePickerOpen(true);
+                              setIsDropdownOpen(false);
+                            }}
+                            className={`w-full px-4 py-2.5 text-left text-xs font-bold hover:bg-black/[0.02] transition-colors ${dateRangeType === 'custom' ? 'text-black bg-black/[0.03]' : 'text-neutral-700'}`}
+                          >
+                            Custom Range...
                           </button>
                         </div>
-                      </div>
+                      )}
+
+                      {dateRangeType === 'custom' && isDatePickerOpen && (
+                        <div className="absolute right-0 top-full mt-2 z-50 bg-white border border-black/10 rounded-2xl p-4 shadow-xl w-[265px] text-black">
+                          {showMonthYearPicker ? (
+                            <div className="py-1">
+                              <div className="flex justify-between items-center px-1 mb-3 border-b border-black/5 pb-2">
+                                <button 
+                                  type="button"
+                                  onClick={() => setViewYear(prev => prev - 1)}
+                                  className="text-xs font-bold text-black/50 hover:text-black p-1 bg-black/[0.02] hover:bg-black/5 rounded"
+                                >
+                                  &larr;
+                                </button>
+                                <span className="text-xs font-black text-black tracking-wider">{viewYear}</span>
+                                <button 
+                                  type="button"
+                                  onClick={() => setViewYear(prev => prev + 1)}
+                                  className="text-xs font-bold text-black/50 hover:text-black p-1 bg-black/[0.02] hover:bg-black/5 rounded"
+                                >
+                                  &rarr;
+                                </button>
+                              </div>
+                              
+                              <div className="grid grid-cols-3 gap-1.5 text-center text-xs font-bold">
+                                {monthNames.map((name, mIdx) => (
+                                  <button
+                                    key={name}
+                                    type="button"
+                                    onClick={() => {
+                                      setViewMonth(mIdx);
+                                      setShowMonthYearPicker(false);
+                                    }}
+                                    className={`py-2 rounded-xl transition-all ${
+                                      viewMonth === mIdx 
+                                        ? 'bg-black text-white' 
+                                        : 'bg-black/[0.02] text-black hover:bg-black/5'
+                                    }`}
+                                  >
+                                    {name}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          ) : (
+                            <div>
+                              <div className="flex items-center justify-between mb-4">
+                                <button
+                                  type="button"
+                                  onClick={() => setShowMonthYearPicker(true)}
+                                  className="flex items-center gap-1 text-xs font-black uppercase text-neutral-800 hover:bg-black/5 px-2 py-1 rounded-lg transition-colors cursor-pointer text-left"
+                                >
+                                  <span>{monthNames[viewMonth]} {viewYear}</span>
+                                  <span className="text-[8px] text-neutral-400">▼</span>
+                                </button>
+
+                                <div className="flex items-center gap-3">
+                                  <button
+                                    type="button"
+                                    onClick={prevMonth}
+                                    className="text-neutral-500 hover:text-neutral-800 hover:bg-black/5 p-1 rounded-full text-sm font-bold transition-all w-6 h-6 flex items-center justify-center cursor-pointer"
+                                  >
+                                    <ChevronLeft className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={nextMonth}
+                                    className="text-neutral-500 hover:text-neutral-800 hover:bg-black/5 p-1 rounded-full text-sm font-bold transition-all w-6 h-6 flex items-center justify-center cursor-pointer"
+                                  >
+                                    <ChevronRight className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-7 gap-y-1 gap-x-1 text-center text-[10px] font-bold text-black/35 tracking-wider mb-1.5">
+                                {weekdays.map((day, i) => (
+                                  <div key={i}>{day}</div>
+                                ))}
+                              </div>
+
+                              <div className="border-b border-black/[0.06] mb-2" />
+
+                              <div className="text-[10px] font-black uppercase tracking-widest text-[#94a3b8] mb-1.5 px-0.5 text-left">
+                                {monthNames[viewMonth]}
+                              </div>
+
+                              <div className="grid grid-cols-7 gap-y-1 gap-x-1 justify-items-center text-center">
+                                {(() => {
+                                  const year = viewYear;
+                                  const month = viewMonth;
+                                  const total = getDaysInMonth(year, month);
+                                  const startOffset = getDayOfWeekOffset(year, month);
+                                  const cells = [];
+                                  
+                                  for (let b = 0; b < startOffset; b++) {
+                                    cells.push(<div key={`blank-${b}`} className="w-8 h-8" />);
+                                  }
+                                  
+                                  for (let d = 1; d <= total; d++) {
+                                    const dateStr = makeDateStr(year, month, d);
+                                    const isStart = isSelectedStart(dateStr);
+                                    const isEnd = isSelectedEnd(dateStr);
+                                    const isDateBetweenVal = isDateBetween(dateStr);
+                                    
+                                    cells.push(
+                                      <div key={`day-${d}`} className="relative w-full h-8 flex items-center justify-center">
+                                        {isDateBetweenVal && (
+                                          <div className="absolute inset-y-1.5 left-0 right-0 bg-[#edf5ff]/80" />
+                                        )}
+                                        {isStart && (customEndDate || hoveredDateStr) && (
+                                          <div className="absolute inset-y-1.5 left-1/2 right-0 bg-[#edf5ff]/80" />
+                                        )}
+                                        {isEnd && (
+                                          <div className="absolute inset-y-1.5 left-0 right-1/2 bg-[#edf5ff]/80" />
+                                        )}
+
+                                        <button
+                                          type="button"
+                                          onClick={() => handleDateClick(dateStr)}
+                                          onMouseEnter={() => setHoveredDateStr(dateStr)}
+                                          onMouseLeave={() => setHoveredDateStr(null)}
+                                          className={`relative z-10 w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all ${
+                                            isStart
+                                              ? 'border border-black bg-white text-black shadow-sm'
+                                              : isEnd
+                                                ? 'bg-[#edf5ff] border border-blue-200 text-[#2c6ec4] shadow-sm'
+                                                : isDateBetweenVal
+                                                  ? 'text-[#2c6ec4] bg-transparent hover:bg-blue-100/30'
+                                                  : 'text-neutral-700 hover:bg-black/5 font-medium'
+                                          }`}
+                                        >
+                                          {d}
+                                        </button>
+                                      </div>
+                                    );
+                                  }
+                                  
+                                  return cells;
+                                })()}
+                              </div>
+
+                              <div className="mt-4 pt-3 border-t border-neutral-100 flex items-center justify-between">
+                                <span className="text-[9px] text-[#8B7E6F] font-black uppercase tracking-wider">
+                                  {customStartDate ? 'Range Active' : 'Select Dates'}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setCustomStartDate('');
+                                    setCustomEndDate('');
+                                    setHoveredDateStr(null);
+                                    setDateRangeType('all');
+                                    setIsDatePickerOpen(false);
+                                  }}
+                                  className="bg-neutral-100 hover:bg-neutral-200 text-neutral-800 hover:text-neutral-900 border border-neutral-200/50 text-[10px] font-black uppercase tracking-wider px-3 py-1.5 rounded-lg transition-all cursor-pointer shadow-sm"
+                                >
+                                  Reset
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+              {/* ==================== DESKTOP HEADER LAYOUT (>= md) ==================== */}
+              <div className="hidden md:flex items-center justify-between w-full">
+                <div className="flex items-center gap-3 min-w-0">
+                  <h2 className="text-2xl font-sans font-bold text-black capitalize tracking-tight truncate">
+                    {activeTab === 'all' ? 'Dashboard' : activeTab === 'create' ? 'Create Order' : activeTab === 'report' ? 'Logistics Reports' : activeTab === 'pickup' ? 'Pickup' : activeTab.replace('-', ' ')}
+                  </h2>
+                </div>
+
+                {/* Custom Premium Stats Card with Cream Background */}
+                <div className="bg-[#FAF6F0] px-6 py-2.5 rounded-[18px] flex items-center gap-5 shadow-md border border-neutral-100 shrink-0">
+                  <div className="text-center px-1 shrink-0">
+                    <p className="text-[10px] font-bold text-[#8B7E6F] tracking-widest uppercase mb-1">ORDERS</p>
+                    <p className="text-xl font-bold font-sans text-black leading-none">{stats.all}</p>
+                  </div>
+                  <div className="w-px h-8 bg-black/10 shrink-0"></div>
+                  <div className="text-center px-1 shrink-0">
+                    <p className="text-[10px] font-bold text-[#8B7E6F] tracking-widest uppercase mb-1">PENDING</p>
+                    <p className="text-xl font-bold font-sans text-black leading-none">{stats.pending}</p>
+                  </div>
+                  <div className="w-px h-8 bg-black/10 shrink-0"></div>
+                  <div className="text-center px-1 shrink-0">
+                    <p className="text-[10px] font-bold text-[#8B7E6F] tracking-widest uppercase mb-1">PICKUP</p>
+                    <p className="text-xl font-bold font-sans text-black leading-none">{stats.pickup}</p>
+                  </div>
+                  <div className="w-px h-8 bg-black/10 shrink-0"></div>
+                  <div className="text-center px-1 shrink-0">
+                    <p className="text-[10px] font-bold text-[#8B7E6F] tracking-widest uppercase mb-1">DELIVERED</p>
+                    <p className="text-xl font-bold font-sans text-black leading-none">{stats.delivered}</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3 shrink-0">
+                  {/* Desktop Inline Search Bar */}
+                  <div className="relative w-44 lg:w-52">
+                    <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-black/40" />
+                    <input 
+                      type="text" 
+                      placeholder="Search..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full bg-white border border-neutral-100 rounded-xl py-2.5 pl-10 pr-8 focus:border-neutral-400 text-xs font-semibold outline-none text-black placeholder:text-neutral-400 shadow-sm"
+                    />
+                    {searchQuery && (
+                      <button 
+                        onClick={() => setSearchQuery('')}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-black/40 hover:text-black p-0.5"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
                     )}
                   </div>
-                )}
+
+                  {/* Central Date Range Selector & Picker for Desktop */}
+                  {(activeTab === 'all' || activeTab === 'pending' || activeTab === 'pickup' || activeTab === 'shipped' || activeTab === 'delivered' || activeTab === 'report') && (
+                    <div className="relative header-datepicker-container flex items-center shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                        className="bg-white border border-neutral-100 rounded-xl py-2.5 pl-10 pr-9 hover:border-neutral-200 transition-all text-xs font-sans font-bold text-black outline-none shadow-sm cursor-pointer flex items-center gap-1 min-w-[130px] text-left relative"
+                      >
+                        <Calendar className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-black/40" />
+                        <span className="truncate">
+                          {dateRangeType === 'all' && 'All Time'}
+                          {dateRangeType === 'today' && 'Today'}
+                          {dateRangeType === '7days' && 'Last 7 Days'}
+                          {dateRangeType === '30days' && 'Last 30 Days'}
+                          {dateRangeType === 'custom' && (
+                            customStartDate 
+                              ? `${formatDatePickerLabel(customStartDate)}${customEndDate ? ` - ${formatDatePickerLabel(customEndDate)}` : ' - ...'}`
+                              : 'Custom'
+                          )}
+                        </span>
+                        <ChevronDown className="absolute right-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-black/40" />
+                      </button>
+
+                      {isDropdownOpen && (
+                        <div className="absolute right-0 top-full mt-2 z-50 bg-white border border-black/15 shadow-xl rounded-2xl w-48 py-2 text-black animate-fade-in">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDateRangeType('all');
+                              setIsDropdownOpen(false);
+                            }}
+                            className={`w-full px-4 py-2.5 text-left text-xs font-bold hover:bg-black/[0.02] transition-colors ${dateRangeType === 'all' ? 'text-black bg-black/[0.03]' : 'text-neutral-700'}`}
+                          >
+                            All Time
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDateRangeType('today');
+                              setIsDropdownOpen(false);
+                            }}
+                            className={`w-full px-4 py-2.5 text-left text-xs font-bold hover:bg-black/[0.02] transition-colors ${dateRangeType === 'today' ? 'text-black bg-black/[0.03]' : 'text-neutral-700'}`}
+                          >
+                            Today
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDateRangeType('7days');
+                              setIsDropdownOpen(false);
+                            }}
+                            className={`w-full px-4 py-2.5 text-left text-xs font-bold hover:bg-black/[0.02] transition-colors ${dateRangeType === '7days' ? 'text-black bg-black/[0.03]' : 'text-neutral-700'}`}
+                          >
+                            Last 7 Days
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDateRangeType('30days');
+                              setIsDropdownOpen(false);
+                            }}
+                            className={`w-full px-4 py-2.5 text-left text-xs font-bold hover:bg-black/[0.02] transition-colors ${dateRangeType === '30days' ? 'text-black bg-black/[0.03]' : 'text-neutral-700'}`}
+                          >
+                            Last 30 Days
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDateRangeType('custom');
+                              setIsDatePickerOpen(true);
+                              setIsDropdownOpen(false);
+                            }}
+                            className={`w-full px-4 py-2.5 text-left text-xs font-bold hover:bg-black/[0.02] transition-colors ${dateRangeType === 'custom' ? 'text-black bg-black/[0.03]' : 'text-neutral-700'}`}
+                          >
+                            Custom Range...
+                          </button>
+                        </div>
+                      )}
+
+                      {dateRangeType === 'custom' && isDatePickerOpen && (
+                        <div className="absolute right-0 top-full mt-2 z-50 bg-white border border-black/10 rounded-2xl p-4 shadow-xl w-[265px] text-black">
+                          {showMonthYearPicker ? (
+                            <div className="py-1">
+                              <div className="flex justify-between items-center px-1 mb-3 border-b border-black/5 pb-2">
+                                <button 
+                                  type="button"
+                                  onClick={() => setViewYear(prev => prev - 1)}
+                                  className="text-xs font-bold text-black/50 hover:text-black p-1 bg-black/[0.02] hover:bg-black/5 rounded"
+                                >
+                                  &larr;
+                                </button>
+                                <span className="text-xs font-black text-black tracking-wider">{viewYear}</span>
+                                <button 
+                                  type="button"
+                                  onClick={() => setViewYear(prev => prev + 1)}
+                                  className="text-xs font-bold text-black/50 hover:text-black p-1 bg-black/[0.02] hover:bg-black/5 rounded"
+                                >
+                                  &rarr;
+                                </button>
+                              </div>
+                              
+                              <div className="grid grid-cols-3 gap-1.5 text-center text-xs font-bold">
+                                {monthNames.map((name, mIdx) => (
+                                  <button
+                                    key={name}
+                                    type="button"
+                                    onClick={() => {
+                                      setViewMonth(mIdx);
+                                      setShowMonthYearPicker(false);
+                                    }}
+                                    className={`py-2 rounded-xl transition-all ${
+                                      viewMonth === mIdx 
+                                        ? 'bg-black text-white' 
+                                        : 'bg-black/[0.02] text-black hover:bg-black/5'
+                                    }`}
+                                  >
+                                    {name}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          ) : (
+                            <div>
+                              <div className="flex items-center justify-between mb-4">
+                                <button
+                                  type="button"
+                                  onClick={() => setShowMonthYearPicker(true)}
+                                  className="flex items-center gap-1 text-xs font-black uppercase text-neutral-800 hover:bg-black/5 px-2 py-1 rounded-lg transition-colors cursor-pointer text-left"
+                                >
+                                  <span>{monthNames[viewMonth]} {viewYear}</span>
+                                  <span className="text-[8px] text-neutral-400">▼</span>
+                                </button>
+
+                                <div className="flex items-center gap-3">
+                                  <button
+                                    type="button"
+                                    onClick={prevMonth}
+                                    className="text-neutral-500 hover:text-neutral-800 hover:bg-black/5 p-1 rounded-full text-sm font-bold transition-all w-6 h-6 flex items-center justify-center cursor-pointer"
+                                  >
+                                    <ChevronLeft className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={nextMonth}
+                                    className="text-neutral-500 hover:text-neutral-800 hover:bg-black/5 p-1 rounded-full text-sm font-bold transition-all w-6 h-6 flex items-center justify-center cursor-pointer"
+                                  >
+                                    <ChevronRight className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-7 gap-y-1 gap-x-1 text-center text-[10px] font-bold text-black/35 tracking-wider mb-1.5">
+                                {weekdays.map((day, i) => (
+                                  <div key={i}>{day}</div>
+                                ))}
+                              </div>
+
+                              <div className="border-b border-black/[0.06] mb-2" />
+
+                              <div className="text-[10px] font-black uppercase tracking-widest text-[#94a3b8] mb-1.5 px-0.5 text-left">
+                                {monthNames[viewMonth]}
+                              </div>
+
+                              <div className="grid grid-cols-7 gap-y-1 gap-x-1 justify-items-center text-center">
+                                {(() => {
+                                  const year = viewYear;
+                                  const month = viewMonth;
+                                  const total = getDaysInMonth(year, month);
+                                  const startOffset = getDayOfWeekOffset(year, month);
+                                  const cells = [];
+                                  
+                                  for (let b = 0; b < startOffset; b++) {
+                                    cells.push(<div key={`blank-${b}`} className="w-8 h-8" />);
+                                  }
+                                  
+                                  for (let d = 1; d <= total; d++) {
+                                    const dateStr = makeDateStr(year, month, d);
+                                    const isStart = isSelectedStart(dateStr);
+                                    const isEnd = isSelectedEnd(dateStr);
+                                    const isDateBetweenVal = isDateBetween(dateStr);
+                                    
+                                    cells.push(
+                                      <div key={`day-${d}`} className="relative w-full h-8 flex items-center justify-center">
+                                        {isDateBetweenVal && (
+                                          <div className="absolute inset-y-1.5 left-0 right-0 bg-[#edf5ff]/80" />
+                                        )}
+                                        {isStart && (customEndDate || hoveredDateStr) && (
+                                          <div className="absolute inset-y-1.5 left-1/2 right-0 bg-[#edf5ff]/80" />
+                                        )}
+                                        {isEnd && (
+                                          <div className="absolute inset-y-1.5 left-0 right-1/2 bg-[#edf5ff]/80" />
+                                        )}
+
+                                        <button
+                                          type="button"
+                                          onClick={() => handleDateClick(dateStr)}
+                                          onMouseEnter={() => setHoveredDateStr(dateStr)}
+                                          onMouseLeave={() => setHoveredDateStr(null)}
+                                          className={`relative z-10 w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all ${
+                                            isStart
+                                              ? 'border border-black bg-white text-black shadow-sm'
+                                              : isEnd
+                                                ? 'bg-[#edf5ff] border border-blue-200 text-[#2c6ec4] shadow-sm'
+                                                : isDateBetweenVal
+                                                  ? 'text-[#2c6ec4] bg-transparent hover:bg-blue-100/30'
+                                                  : 'text-neutral-700 hover:bg-black/5 font-medium'
+                                          }`}
+                                        >
+                                          {d}
+                                        </button>
+                                      </div>
+                                    );
+                                  }
+                                  
+                                  return cells;
+                                })()}
+                              </div>
+
+                              <div className="mt-4 pt-3 border-t border-neutral-100 flex items-center justify-between">
+                                <span className="text-[9px] text-[#8B7E6F] font-black uppercase tracking-wider">
+                                  {customStartDate ? 'Range Active' : 'Select Dates'}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setCustomStartDate('');
+                                    setCustomEndDate('');
+                                    setHoveredDateStr(null);
+                                    setDateRangeType('all');
+                                    setIsDatePickerOpen(false);
+                                  }}
+                                  className="bg-neutral-100 hover:bg-neutral-200 text-neutral-800 hover:text-neutral-900 border border-neutral-200/50 text-[10px] font-black uppercase tracking-wider px-3 py-1.5 rounded-lg transition-all cursor-pointer shadow-sm"
+                                >
+                                  Reset
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
-            )}
-          </div>
+            </>
+          )}
         </header>
 
-        <div className="flex-1 overflow-y-auto p-12 custom-scrollbar">
+        <div className="flex-1 overflow-y-auto p-3 sm:p-6 md:p-12 custom-scrollbar">
           <div className="max-w-5xl mx-auto space-y-12">
             {activeTab === 'all' ? (
               <OverviewDashboard 

@@ -1,4 +1,4 @@
-export type OrderStatus = 'pending' | 'shipped' | 'delivered';
+export type OrderStatus = 'pending' | 'pickup' | 'ready' | 'shipped' | 'delivered';
 
 export interface Movement {
   status: string;

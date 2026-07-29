@@ -273,7 +273,7 @@ export default function CreateOrder({ userId, onSuccess }: CreateOrderProps) {
   );
 
   return (
-    <div className="bg-white rounded-[32px] p-10 border border-black/[0.03] shadow-xl w-full max-w-4xl mx-auto">
+    <div className="bg-white rounded-2xl sm:rounded-[32px] p-4 sm:p-8 md:p-10 border border-black/[0.03] shadow-xl w-full max-w-4xl mx-auto">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8 border-b border-black/5 pb-6">
         <div className="flex items-center gap-3">
           <div className="w-12 h-12 bg-[#FF9800] rounded-2xl flex items-center justify-center text-black">

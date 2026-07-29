@@ -337,9 +337,18 @@ export default function OverviewDashboard({
     return true;
   });
 
+  const isPickupStatus = (o: Order) => {
+    if (!o) return false;
+    const s = (o.status || '').toLowerCase();
+    if (s === 'pickup' || s === 'ready') return true;
+    if (s === 'pending' && (!!o.pickedAt || (o.movement && o.movement.some(m => (m.status || '').toLowerCase().includes('pick'))))) return true;
+    return false;
+  };
+
   // Process data for Status Distribution
   const statusData = [
-    { name: 'Pending', value: displayOrders.filter(o => o.status === 'pending').length, color: '#94a3b8' },
+    { name: 'Pending', value: displayOrders.filter(o => o.status === 'pending' && !isPickupStatus(o)).length, color: '#94a3b8' },
+    { name: 'Pickup', value: displayOrders.filter(o => isPickupStatus(o)).length, color: '#d97706' },
     { name: 'Shipped', value: displayOrders.filter(o => o.status === 'shipped').length, color: '#3b82f6' },
     { name: 'Delivered', value: displayOrders.filter(o => o.status === 'delivered').length, color: '#10b981' },
   ].filter(d => d.value > 0);
@@ -347,7 +356,8 @@ export default function OverviewDashboard({
   // Simple daily order aggregation (mock dates if real dates aren't varied enough for a good graph)
   // For now, let's just group by status as a bar chart for volume
   const volumeData = [
-    { name: 'Pending', count: displayOrders.filter(o => o.status === 'pending').length },
+    { name: 'Pending', count: displayOrders.filter(o => o.status === 'pending' && !isPickupStatus(o)).length },
+    { name: 'Pickup', count: displayOrders.filter(o => isPickupStatus(o)).length },
     { name: 'Shipped', count: displayOrders.filter(o => o.status === 'shipped').length },
     { name: 'Delivered', count: displayOrders.filter(o => o.status === 'delivered').length },
   ];
@@ -515,7 +525,7 @@ export default function OverviewDashboard({
       className="space-y-8"
     >
       {/* Metrics Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4 md:gap-6">
         <MetricCard 
           icon={<List className="w-5 h-5 text-blue-600" />}
           label="Total Orders"
@@ -549,7 +559,7 @@ export default function OverviewDashboard({
       {/* Row 2: Status Distribution & Monthly Volume */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Status Distribution */}
-        <div className="bg-white p-8 rounded-3xl shadow-sm border border-black/5 lg:col-span-1 flex flex-col justify-between">
+        <div className="bg-white p-4 sm:p-8 rounded-2xl sm:rounded-3xl shadow-sm border border-black/5 lg:col-span-1 flex flex-col justify-between">
           <div>
             <h4 className="text-xs font-black uppercase tracking-[0.3em] text-black/40 mb-6">Status Distribution</h4>
           </div>
@@ -709,7 +719,7 @@ export default function OverviewDashboard({
       {/* Row 3: Regional Logistics Table & Volume by Location Vertical Chart */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Units per Location Table */}
-        <div className="bg-white p-8 rounded-3xl shadow-sm border border-black/5 lg:col-span-2 overflow-hidden flex flex-col">
+        <div className="bg-white p-4 sm:p-8 rounded-2xl sm:rounded-3xl shadow-sm border border-black/5 lg:col-span-2 overflow-hidden flex flex-col">
           <h4 className="text-xs font-black uppercase tracking-[0.3em] text-black/40 mb-8">Regional Logistics</h4>
           <div className="flex-1 overflow-x-auto">
             <table className="w-full text-left">
@@ -798,7 +808,7 @@ export default function OverviewDashboard({
         </div>
 
         {/* Volume by Location (Orders & Total Units) */}
-        <div className="bg-white p-8 rounded-3xl shadow-sm border border-black/5 lg:col-span-1">
+        <div className="bg-white p-4 sm:p-8 rounded-2xl sm:rounded-3xl shadow-sm border border-black/5 lg:col-span-1">
           <div className="flex flex-col gap-4 mb-6 mt-2">
             <h4 className="text-[13px] font-black uppercase tracking-[0.25em] text-[#5e7085]/90 select-none font-sans">
               VOLUME BY LOCATION
@@ -930,16 +940,16 @@ export default function OverviewDashboard({
 
 function MetricCard({ icon, label, value, subValue, iconBgClass }: any) {
   return (
-    <div className="bg-white p-6 rounded-3xl border border-black/5 shadow-sm hover:shadow-md transition-all duration-200">
-      <div className="flex items-start justify-between mb-4">
-        <div className={`p-2.5 rounded-xl flex items-center justify-center ${iconBgClass || 'bg-black/5'}`}>
+    <div className="bg-white p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-black/5 shadow-sm hover:shadow-md transition-all duration-200 aspect-square sm:aspect-auto flex flex-col justify-between">
+      <div className="flex items-start justify-between">
+        <div className={`p-2 sm:p-2.5 rounded-xl flex items-center justify-center ${iconBgClass || 'bg-black/5'}`}>
           {icon}
         </div>
       </div>
       <div>
-        <p className="text-[10px] font-black uppercase tracking-[0.15em] text-neutral-400 mb-2">{label}</p>
-        <p className="text-2xl font-sans font-bold text-black tracking-tight mb-1.5">{value}</p>
-        <p className="text-[10px] text-neutral-400 font-medium">{subValue}</p>
+        <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.15em] text-neutral-400 mb-1 sm:mb-2">{label}</p>
+        <p className="text-xl sm:text-2xl font-sans font-bold text-black tracking-tight mb-0.5 sm:mb-1.5">{value}</p>
+        <p className="text-[9.5px] sm:text-[10px] text-neutral-400 font-medium">{subValue}</p>
       </div>
     </div>
   );

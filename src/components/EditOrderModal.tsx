@@ -111,7 +111,7 @@ const formatTimeAMPM = (date: Date, includeSeconds = false, lowercase = false) =
 export default function EditOrderModal({ order, isOpen, onClose }: EditOrderModalProps) {
   const [shippingAddress, setShippingAddress] = useState('');
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
-  const [status, setStatus] = useState<'pending' | 'shipped' | 'delivered'>('pending');
+  const [status, setStatus] = useState<'pending' | 'pickup' | 'shipped' | 'delivered'>('pending');
   const [remark, setRemark] = useState('');
   const [driverName, setDriverName] = useState('');
   const [deliveredBy, setDeliveredBy] = useState('');
@@ -380,8 +380,8 @@ export default function EditOrderModal({ order, isOpen, onClose }: EditOrderModa
               <label className="text-[10px] font-black uppercase tracking-widest text-black/60">
                 TRANSIT STATUS
               </label>
-              <div className="grid grid-cols-3 gap-2">
-                {(['pending', 'shipped', 'delivered'] as const).map((s) => (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {(['pending', 'pickup', 'shipped', 'delivered'] as const).map((s) => (
                   <button
                     key={s}
                     type="button"

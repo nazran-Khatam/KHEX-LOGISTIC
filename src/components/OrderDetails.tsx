@@ -279,9 +279,9 @@ export default function OrderDetails({ order, isOpen, onClose }: OrderDetailsPro
             className="fixed right-0 top-0 bottom-0 w-full max-w-xl bg-white z-50 shadow-[-40px_0_80px_rgba(0,0,0,0.1)] border-l border-black/5 flex flex-col overflow-hidden"
           >
             {/* Header */}
-            <div className="p-8 bg-black flex items-center justify-between shrink-0">
+            <div className="p-4 sm:p-8 bg-black flex items-center justify-between shrink-0">
               <div>
-                <h3 className="text-2xl font-serif italic mb-1 text-white">Movement Manifest</h3>
+                <h3 className="text-xl sm:text-2xl font-serif italic mb-1 text-white">Movement Manifest</h3>
                 <p className="text-[10px] text-white/40 uppercase tracking-[0.2em]">Node: #{order.id.slice(0, 12).toUpperCase()}</p>
               </div>
               <button 
@@ -292,9 +292,9 @@ export default function OrderDetails({ order, isOpen, onClose }: OrderDetailsPro
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-8 custom-scrollbar space-y-12">
+            <div className="flex-1 overflow-y-auto p-4 sm:p-8 custom-scrollbar space-y-8 sm:space-y-12">
               {/* Summary */}
-              <section className="bg-black/[0.02] border border-black/5 rounded-[32px] p-8">
+              <section className="bg-black/[0.02] border border-black/5 rounded-2xl sm:rounded-[32px] p-4 sm:p-8">
                 <div className="flex items-center gap-4 mb-8">
                   <div className="w-14 h-14 bg-black rounded-2xl flex items-center justify-center text-white shadow-xl shadow-black/10">
                     <Package className="w-6 h-6" />

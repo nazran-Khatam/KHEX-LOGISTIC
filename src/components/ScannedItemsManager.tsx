@@ -113,19 +113,19 @@ export default function ScannedItemsManager({
       </div>
 
       {/* Manual Code Input Control Area */}
-      <div className="flex gap-2">
+      <div className="flex flex-col sm:flex-row gap-2">
         <input
           type="text"
           value={manualCode}
           onChange={(e) => setManualCode(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder="Manual code..."
-          className="flex-1 bg-white border border-black/10 text-black rounded-xl py-3 px-4 outline-none focus:border-[#FF9800] focus:ring-1 focus:ring-[#FF9800] text-xs font-mono placeholder:text-black/25 transition-all font-semibold shadow-inner"
+          className="w-full sm:flex-1 bg-white border border-black/10 text-black rounded-xl py-3 px-4 outline-none focus:border-[#FF9800] focus:ring-1 focus:ring-[#FF9800] text-xs font-mono placeholder:text-black/25 transition-all font-semibold shadow-inner"
         />
         <button
           type="button"
           onClick={() => handleAddCode(manualCode)}
-          className="bg-[#FF9800] hover:bg-[#FFA726] text-black text-xs font-black uppercase tracking-wider px-5 rounded-xl transition-all shadow-lg shadow-[#FF9800]/10 active:scale-95 flex items-center justify-center min-w-[70px]"
+          className="w-full sm:w-auto bg-[#FF9800] hover:bg-[#FFA726] text-black text-xs font-black uppercase tracking-wider py-3 sm:py-0 px-5 rounded-xl transition-all shadow-lg shadow-[#FF9800]/10 active:scale-95 flex items-center justify-center sm:min-w-[70px]"
         >
           Add
         </button>
