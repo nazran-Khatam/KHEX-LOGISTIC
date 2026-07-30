@@ -299,35 +299,63 @@ function getResolvedMovement(order: Order): any[] {
 function getMovementDate(order: Order, targetStatus: 'ready' | 'shipped' | 'delivered'): Date | null {
   if (!order) return null;
   
-  const resolvedMovement = getResolvedMovement(order);
+  const statusLower = (order.status || '').toLowerCase();
+  if (statusLower === 'pending') {
+    return null;
+  }
   
-  const safeGetDate = (date: any): Date => {
-    return universalParseDate(date) || new Date();
-  };
-
   if (targetStatus === 'ready') {
+    if (order.readyAt && typeof order.readyAt === 'string' && order.readyAt.trim() !== '') {
+      const d = universalParseDate(order.readyAt);
+      if (d && !isNaN(d.getTime())) return d;
+    }
+    if (order.readyTime && typeof order.readyTime === 'string' && order.readyTime.trim() !== '') {
+      const d = universalParseDate(order.readyTime);
+      if (d && !isNaN(d.getTime())) return d;
+    }
+    
+    const resolvedMovement = getResolvedMovement(order);
     const step = resolvedMovement.find(m => {
       const statusLower = (m.status || '').toLowerCase();
       return statusLower.includes('ready') || statusLower.includes('prepare');
     });
     if (step && step.timestamp) {
-      return safeGetDate(step.timestamp);
+      return universalParseDate(step.timestamp);
     }
+    
+    const d = getReadyDate(order, true);
+    if (d && !isNaN(d.getTime())) return d;
   } else if (targetStatus === 'shipped') {
+    if (order.pickedAt && typeof order.pickedAt === 'string' && order.pickedAt.trim() !== '') {
+      const d = universalParseDate(order.pickedAt);
+      if (d && !isNaN(d.getTime())) return d;
+    }
+    const d = getPickupDate(order, true);
+    if (d && !isNaN(d.getTime())) return d;
+    
+    const resolvedMovement = getResolvedMovement(order);
     const step = resolvedMovement.find(m => {
       const statusLower = (m.status || '').toLowerCase();
       return !statusLower.includes('ready') && (statusLower.includes('ship') || statusLower.includes('transit') || statusLower.includes('pick') || statusLower.includes('driver'));
     });
     if (step && step.timestamp) {
-      return safeGetDate(step.timestamp);
+      return universalParseDate(step.timestamp);
     }
   } else if (targetStatus === 'delivered') {
+    if (order.deliveredAt && typeof order.deliveredAt === 'string' && order.deliveredAt.trim() !== '') {
+      const d = universalParseDate(order.deliveredAt);
+      if (d && !isNaN(d.getTime())) return d;
+    }
+    const d = getDeliveryDate(order, true);
+    if (d && !isNaN(d.getTime())) return d;
+    
+    const resolvedMovement = getResolvedMovement(order);
     const step = resolvedMovement.find(m => {
       const statusLower = (m.status || '').toLowerCase();
       return statusLower.includes('deliver') || statusLower.includes('received');
     });
     if (step && step.timestamp) {
-      return safeGetDate(step.timestamp);
+      return universalParseDate(step.timestamp);
     }
   }
   return null;
@@ -357,7 +385,27 @@ function isTimeFieldChanged(proposedStr: string, originalDate: Date | null): boo
 function getMovementTime(order: Order, targetStatus: 'ready' | 'shipped' | 'delivered'): string {
   if (!order) return 'N/A';
   
+  const statusLower = (order.status || '').toLowerCase();
+  if (statusLower === 'pending') {
+    return 'N/A';
+  }
+  
   if (targetStatus === 'ready') {
+    // Try to get from readyAt/readyTime first
+    if (order.readyAt && typeof order.readyAt === 'string' && order.readyAt.trim() !== '') {
+      const d = universalParseDate(order.readyAt);
+      if (d && !isNaN(d.getTime())) {
+        return d.toLocaleString('en-GB');
+      }
+    }
+    if (order.readyTime && typeof order.readyTime === 'string' && order.readyTime.trim() !== '') {
+      const d = universalParseDate(order.readyTime);
+      if (d && !isNaN(d.getTime())) {
+        return d.toLocaleString('en-GB');
+      }
+    }
+    
+    // Fall back to movement step
     const resolvedMovement = getResolvedMovement(order);
     const step = resolvedMovement.find(m => {
       const statusLower = (m.status || '').toLowerCase();
@@ -369,12 +417,32 @@ function getMovementTime(order: Order, targetStatus: 'ready' | 'shipped' | 'deli
         return d.toLocaleString('en-GB');
       }
     }
+    
+    // Try getReadyDate strict fallback
+    const d = getReadyDate(order, true);
+    if (d && !isNaN(d.getTime())) {
+      return d.toLocaleString('en-GB');
+    }
   } else if (targetStatus === 'shipped') {
+    // Try direct field first
+    if (order.pickedAt && typeof order.pickedAt === 'string' && order.pickedAt.trim() !== '') {
+      const d = universalParseDate(order.pickedAt);
+      if (d && !isNaN(d.getTime())) {
+        return d.toLocaleString('en-GB');
+      }
+    }
     const d = getPickupDate(order);
     if (d && !isNaN(d.getTime())) {
       return d.toLocaleString('en-GB');
     }
   } else if (targetStatus === 'delivered') {
+    // Try direct field first
+    if (order.deliveredAt && typeof order.deliveredAt === 'string' && order.deliveredAt.trim() !== '') {
+      const d = universalParseDate(order.deliveredAt);
+      if (d && !isNaN(d.getTime())) {
+        return d.toLocaleString('en-GB');
+      }
+    }
     const d = getDeliveryDate(order);
     if (d && !isNaN(d.getTime())) {
       return d.toLocaleString('en-GB');

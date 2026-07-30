@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, MapPin, Package, Clock, Truck, CheckCircle2, Navigation, ChevronDown } from 'lucide-react';
+import { doc, updateDoc } from 'firebase/firestore';
+import { db } from '../firebase';
 import { Order } from '../types';
 import { cn } from '../lib/utils';
 import { format } from 'date-fns';
@@ -11,6 +13,16 @@ interface OrderDetailsProps {
   isOpen: boolean;
   onClose: () => void;
 }
+
+const formatDateToStandardString = (date: Date): string => {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  const hh = String(date.getHours()).padStart(2, '0');
+  const min = String(date.getMinutes()).padStart(2, '0');
+  const ss = String(date.getSeconds()).padStart(2, '0');
+  return `${dd}/${mm}/${yyyy}, ${hh}:${min}:${ss}`;
+};
 
 export function getDeterministicName(seed: string, type: 'driver' | 'receiver', order?: any) {
   if (type === 'driver' && order) {
@@ -231,6 +243,140 @@ export function getDeliveryDate(order: Order | undefined, strict = false): Date 
 
 export default function OrderDetails({ order, isOpen, onClose }: OrderDetailsProps) {
   const [expandedItems, setExpandedItems] = useState<Record<string, boolean>>({});
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+
+  const handleReadyToPickup = async () => {
+    if (!order?.id) return;
+    setIsUpdating(true);
+    setUpdateError(null);
+    try {
+      const now = new Date();
+      const stdStr = formatDateToStandardString(now);
+
+      const orderRef = doc(db, 'orders', order.id);
+      
+      const fieldsToUpdate: any = {
+        status: 'ready',
+        readyAt: stdStr,
+        readyTime: stdStr,
+        pickedAt: ''
+      };
+
+      let movement = [...(order.movement || [])];
+      const hasReady = movement.some(m => {
+        const s = (m.status || '').toLowerCase();
+        return s.includes('ready') || s.includes('prepare');
+      });
+      if (!hasReady) {
+        movement.push({
+          status: 'Ready to Pickup',
+          timestamp: now,
+          location: 'Khex Sorting Facility',
+          description: 'Package verified, processed, and ready for driver pickup.'
+        });
+      }
+      fieldsToUpdate.movement = movement;
+
+      await updateDoc(orderRef, fieldsToUpdate);
+      onClose();
+    } catch (err) {
+      console.error('Failed to change status to Ready to Pickup:', err);
+      setUpdateError('Error updating order status. Please try again.');
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+  const getReadyDateObj = (order: Order): Date | null => {
+    if (order.readyAt && typeof order.readyAt === 'string' && order.readyAt.trim() !== '') {
+      const d = universalParseDate(order.readyAt);
+      if (d && !isNaN(d.getTime())) return d;
+    }
+    if (order.readyTime && typeof order.readyTime === 'string' && order.readyTime.trim() !== '') {
+      const d = universalParseDate(order.readyTime);
+      if (d && !isNaN(d.getTime())) return d;
+    }
+    const readyStep = order.movement?.find(m => {
+      const s = (m.status || '').toLowerCase();
+      return s.includes('ready') || s.includes('prepare');
+    });
+    if (readyStep && readyStep.timestamp) {
+      const d = universalParseDate(readyStep.timestamp);
+      if (d && !isNaN(d.getTime())) return d;
+    }
+    return null;
+  };
+
+  const formatCSVDate = (date: Date | null): string => {
+    if (!date) return '';
+    const dd = String(date.getDate()).padStart(2, '0');
+    const mm = String(date.getMonth() + 1).padStart(2, '0');
+    const yyyy = date.getFullYear();
+    return `${dd}/${mm}/${yyyy}`;
+  };
+
+  const handleExportCSV = () => {
+    if (!order) return;
+
+    const headers = ["ORDER_NO", "REFERENCE", "DESTINATION", "DATE", "BOUTIQUE", "CARTON_NO", "QR_DATA"];
+    
+    const readyDate = getReadyDateObj(order);
+    const dateStr = readyDate ? formatCSVDate(readyDate) : formatCSVDate(new Date());
+
+    const rows: string[][] = [];
+
+    order.items.forEach(item => {
+      const serials = getSerialNumbers(item.name);
+      const destinationValue = order.shippingAddress || (order as any).location || '';
+      
+      if (serials && serials.length > 0) {
+        serials.forEach((serial, sIdx) => {
+          rows.push([
+            item.name,                     // ORDER_NO: "PRODUCT NAME"
+            "-",                           // REFERENCE: "-"
+            destinationValue,              // DESTINATION: Location
+            dateStr,                       // DATE: Ready Time Date
+            destinationValue,              // BOUTIQUE: Location
+            String(sIdx + 1),              // CARTON_NO: sequence number
+            serial                         // QR_DATA: Serial Item
+          ]);
+        });
+      } else {
+        rows.push([
+          item.name,
+          "-",
+          destinationValue,
+          dateStr,
+          destinationValue,
+          "1",
+          "-"
+        ]);
+      }
+    });
+
+    const csvContent = [
+      headers.join(","),
+      ...rows.map(row => 
+        row.map(field => {
+          const stringVal = String(field || '');
+          if (stringVal.includes(",") || stringVal.includes("\n") || stringVal.includes('"')) {
+            return `"${stringVal.replace(/"/g, '""')}"`;
+          }
+          return stringVal;
+        }).join(",")
+      )
+    ].join("\r\n");
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `Order_${order.id}_Transaction.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   if (!order && isOpen) return null;
 
@@ -757,9 +903,28 @@ export default function OrderDetails({ order, isOpen, onClose }: OrderDetailsPro
                   })}
                 </div>
                 
-                <button className="w-full mt-10 py-4 bg-black text-white text-[9px] font-bold uppercase tracking-[0.3em] rounded hover:bg-black/80 transition-all shadow-2xl">
-                  Export Transaction PDF
-                </button>
+                {updateError && (
+                  <p className="mt-4 text-[10px] font-extrabold text-red-500 uppercase tracking-wider text-center animate-pulse">
+                    {updateError}
+                  </p>
+                )}
+
+                {statusLower === 'pending' ? (
+                  <button 
+                    onClick={handleReadyToPickup}
+                    disabled={isUpdating}
+                    className="w-full mt-10 py-4 bg-[#FF9800] text-black text-[10px] font-black uppercase tracking-[0.25em] rounded hover:bg-[#FF9800]/90 hover:scale-[1.01] active:scale-[0.99] disabled:opacity-50 transition-all shadow-2xl flex items-center justify-center gap-2"
+                  >
+                    {isUpdating ? 'Updating Status...' : 'Ready to Pickup'}
+                  </button>
+                ) : statusLower === 'ready' ? (
+                  <button 
+                    onClick={handleExportCSV}
+                    className="w-full mt-10 py-4 bg-black text-white text-[9px] font-bold uppercase tracking-[0.3em] rounded hover:bg-black/80 transition-all shadow-2xl"
+                  >
+                    Export Transaction CSV
+                  </button>
+                ) : null}
               </section>
             </div>
           </motion.aside>

@@ -268,6 +268,47 @@ function getDeliveryDate(order: Order | undefined, strict = false): Date | null 
   return null;
 }
 
+// Extract ready date of an order
+function getReadyDate(order: Order | undefined, strict = false): Date | null {
+  if (!order) return null;
+  if (order.readyAt && (typeof order.readyAt !== 'string' || order.readyAt.trim() !== '')) {
+    const d = universalParseDate(order.readyAt);
+    if (d && !isNaN(d.getTime())) return d;
+  }
+  if (order.readyTime && (typeof order.readyTime !== 'string' || order.readyTime.trim() !== '')) {
+    const d = universalParseDate(order.readyTime);
+    if (d && !isNaN(d.getTime())) return d;
+  }
+  
+  if (order.movement && order.movement.length > 0) {
+    const readyStep = order.movement.find(m => {
+      const statusLower = (m.status || '').toLowerCase();
+      return statusLower.includes('ready') || statusLower.includes('prepare');
+    });
+    if (readyStep && readyStep.timestamp) {
+      const d = universalParseDate(readyStep.timestamp);
+      if (d && !isNaN(d.getTime())) return d;
+    }
+  }
+
+  if (strict) return null;
+
+  const isPending = (order.status || '').toLowerCase() === 'pending';
+  const isReadyOrBeyond = !isPending && (order.status === 'ready' || order.status === 'shipped' || order.status === 'delivered' || !!order.readyTime || !!order.readyAt || !!order.pickedAt || (order.pickedItems && Object.keys(order.pickedItems).length > 0));
+  if (isReadyOrBeyond) {
+    const placementTime = universalParseDate(order.orderDate) || new Date();
+    const pickupDateVal = getPickupDate(order, true);
+    if (pickupDateVal && pickupDateVal > placementTime) {
+      return new Date(placementTime.getTime() + Math.max(60000, Math.floor((pickupDateVal.getTime() - placementTime.getTime()) / 2)));
+    } else {
+      return placementTime;
+    }
+  }
+  
+  return null;
+}
+
+
 // Format duration helper function representing days in days, hours or minutes
 function formatDuration(days: number): string {
   if (days <= 0) return '0d';
@@ -464,11 +505,11 @@ export default function OverviewDashboard({
     if (order.status === 'delivered') {
       acc[loc].delivered += 1;
 
-      // Extract delivery transit duration
-      const pickupDate = getPickupDate(order, true);
+      // Extract duration from Ready Time until Received Time
+      const readyDate = getReadyDate(order, false);
       const receivedDate = getDeliveryDate(order, true);
-      if (pickupDate && receivedDate) {
-        const diff = Math.max(0, receivedDate.getTime() - pickupDate.getTime());
+      if (readyDate && receivedDate) {
+        const diff = Math.max(0, receivedDate.getTime() - readyDate.getTime());
         const diffDays = diff / (1000 * 60 * 60 * 24);
         acc[loc].times.push(diffDays);
       }
