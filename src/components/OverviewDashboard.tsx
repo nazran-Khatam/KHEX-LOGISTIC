@@ -363,8 +363,32 @@ export default function OverviewDashboard({
     );
   };
 
+  const isPickupStatus = (o: Order) => {
+    if (!o) return false;
+    const s = (o.status || '').toLowerCase();
+    if (s === 'pickup' || s === 'ready') return true;
+    if (s === 'pending' && (!!o.pickedAt || (o.movement && o.movement.some(m => (m.status || '').toLowerCase().includes('pick'))))) return true;
+    return false;
+  };
+
   const getOrderDate = (order: Order): Date | null => {
-    return universalParseDate(order.orderDate);
+    const statusMatch = (order.status || 'pending').toLowerCase();
+    if (statusMatch === 'pickup' || statusMatch === 'ready' || isPickupStatus(order)) {
+      const d = getPickupDate(order) || universalParseDate(order.orderDate);
+      if (d) return d;
+    } else if (statusMatch === 'pending') {
+      const d = universalParseDate(order.orderDate);
+      if (d) return d;
+    } else if (statusMatch === 'shipped') {
+      const d = getPickupDate(order);
+      if (d) return d;
+    } else if (statusMatch === 'delivered') {
+      const d = getDeliveryDate(order);
+      if (d) return d;
+    }
+
+    // Fallback
+    return universalParseDate(order.orderDate) || universalParseDate(order.updatedAt) || new Date();
   };
 
   const displayOrders = orders.filter(order => {
@@ -409,14 +433,6 @@ export default function OverviewDashboard({
     
     return true;
   });
-
-  const isPickupStatus = (o: Order) => {
-    if (!o) return false;
-    const s = (o.status || '').toLowerCase();
-    if (s === 'pickup' || s === 'ready') return true;
-    if (s === 'pending' && (!!o.pickedAt || (o.movement && o.movement.some(m => (m.status || '').toLowerCase().includes('pick'))))) return true;
-    return false;
-  };
 
   // Process data for Status Distribution
   const statusData = [
