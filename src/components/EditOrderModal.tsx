@@ -78,6 +78,7 @@ const LOCATIONS = [
   'IOI City Mall',
   'IOI Conezion',
   'IOI Damansara',
+  'IOI Experience',
   'Ipoh',
   'KB',
   'KLEM',
