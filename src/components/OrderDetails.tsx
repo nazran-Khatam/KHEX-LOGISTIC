@@ -910,14 +910,22 @@ export default function OrderDetails({ order, isOpen, onClose }: OrderDetailsPro
                 )}
 
                 {statusLower === 'pending' ? (
-                  <button 
-                    onClick={handleReadyToPickup}
-                    disabled={isUpdating}
-                    className="w-full mt-10 py-4 bg-[#FF9800] text-black text-[10px] font-black uppercase tracking-[0.25em] rounded hover:bg-[#FF9800]/90 hover:scale-[1.01] active:scale-[0.99] disabled:opacity-50 transition-all shadow-2xl flex items-center justify-center gap-2"
-                  >
-                    {isUpdating ? 'Updating Status...' : 'Ready to Pickup'}
-                  </button>
-                ) : statusLower === 'ready' ? (
+                  <div className="flex flex-col gap-3 mt-10">
+                    <button 
+                      onClick={handleReadyToPickup}
+                      disabled={isUpdating}
+                      className="w-full py-4 bg-[#FF9800] text-black text-[10px] font-black uppercase tracking-[0.25em] rounded hover:bg-[#FF9800]/90 hover:scale-[1.01] active:scale-[0.99] disabled:opacity-50 transition-all shadow-2xl flex items-center justify-center gap-2"
+                    >
+                      {isUpdating ? 'Updating Status...' : 'Ready to Pickup'}
+                    </button>
+                    <button 
+                      onClick={handleExportCSV}
+                      className="w-full py-4 bg-black text-white text-[9px] font-bold uppercase tracking-[0.3em] rounded hover:bg-black/80 transition-all shadow-2xl"
+                    >
+                      Export Transaction CSV
+                    </button>
+                  </div>
+                ) : (statusLower === 'ready' || statusLower === 'shipped' || statusLower === 'delivered') ? (
                   <button 
                     onClick={handleExportCSV}
                     className="w-full mt-10 py-4 bg-black text-white text-[9px] font-bold uppercase tracking-[0.3em] rounded hover:bg-black/80 transition-all shadow-2xl"
